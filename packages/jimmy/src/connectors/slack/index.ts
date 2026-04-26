@@ -36,6 +36,7 @@ export class SlackConnector implements Connector {
   private channelNameCache = new Map<string, { name: string; cachedAt: number }>();
   private userInfoCache = new Map<string, { info: SpeakerInfo; cachedAt: number }>();
   private botUserId: string | null = null;
+  private typingIntervals = new Map<string, ReturnType<typeof setInterval>>();
   private readonly triageConfig: SlackTriageConfig | undefined;
   private readonly portalName: string | undefined;
   private readonly operatorName: string | undefined;
@@ -51,12 +52,17 @@ export class SlackConnector implements Connector {
     attachments: true,
   };
 
-  /**
-   * Set the AI assistant typing status in a thread.
-   * Uses Slack's assistant.threads.setStatus API for native animated indicator.
-   */
-  async setTypingStatus(channelId: string, threadTs: string | undefined, status: string): Promise<void> {
-    if (!threadTs) return;
+  private formatSlackError(err: unknown): string {
+    if (err instanceof Error) {
+      const data = (err as any).data;
+      const slackError = data?.error ? ` (${data.error})` : "";
+      const detail = data?.detail ? `: ${data.detail}` : "";
+      return `${err.message}${slackError}${detail}`;
+    }
+    return String(err);
+  }
+
+  private async sendTypingStatus(channelId: string, threadTs: string, status: string): Promise<void> {
     const payload = {
       channel_id: channelId,
       thread_ts: threadTs,
@@ -70,8 +76,32 @@ export class SlackConnector implements Connector {
         await client.apiCall("assistant.threads.setStatus", payload);
       }
     } catch (err) {
-      logger.debug(`Slack typing status failed: ${err}`);
+      logger.warn(`Slack typing status failed: ${this.formatSlackError(err)}`);
     }
+  }
+
+  /**
+   * Set the AI assistant typing status in a thread.
+   * Uses Slack's assistant.threads.setStatus API for native animated indicator.
+   */
+  async setTypingStatus(channelId: string, threadTs: string | undefined, status: string): Promise<void> {
+    if (!threadTs) return;
+    const key = `${channelId}:${threadTs}`;
+    const existing = this.typingIntervals.get(key);
+    if (existing) {
+      clearInterval(existing);
+      this.typingIntervals.delete(key);
+    }
+
+    await this.sendTypingStatus(channelId, threadTs, status);
+    if (!status) return;
+
+    // Slack clears assistant status after roughly two minutes if no message is
+    // sent, so refresh while long-running engine calls are still active.
+    const interval = setInterval(() => {
+      this.sendTypingStatus(channelId, threadTs, status).catch(() => {});
+    }, 90_000);
+    this.typingIntervals.set(key, interval);
   }
 
   constructor(config: SlackConnectorConfig, context: SlackConnectorContext = {}) {
@@ -526,6 +556,10 @@ export class SlackConnector implements Connector {
   }
 
   async stop() {
+    for (const interval of this.typingIntervals.values()) {
+      clearInterval(interval);
+    }
+    this.typingIntervals.clear();
     await this.app.stop();
     this.started = false;
     logger.info("Slack connector stopped");

@@ -244,7 +244,7 @@ export class SessionManager {
     // Set native typing indicator (Slack assistant.threads.setStatus)
     const threadTs = target.thread || target.messageTs;
     if (decorateMessages && connector.setTypingStatus) {
-      await connector.setTypingStatus(target.channel, threadTs, "is thinking...").catch(() => {});
+      await connector.setTypingStatus(target.channel, threadTs, "入力中...").catch(() => {});
     }
 
     updateSession(session.id, {
@@ -610,7 +610,7 @@ export class SessionManager {
 
             // Show active processing again
             if (decorateMessages && connector.setTypingStatus) {
-              await connector.setTypingStatus(target.channel, threadTs, "is thinking...").catch(() => {});
+              await connector.setTypingStatus(target.channel, threadTs, "入力中...").catch(() => {});
             }
             if (decorateMessages && capabilities.reactions) {
               await connector.removeReaction(target, waitEmoji).catch(() => {});

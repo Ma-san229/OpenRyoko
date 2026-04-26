@@ -2,6 +2,12 @@
 
 > **バージョン体系について**: 2026.4.26 から日付ベース (`YYYY.M.D`) のCalVerに移行しました。npm semver の制約上、月・日の leading zero は付けません (例: 4月26日 → `2026.4.26`)。
 
+## [2026.4.27] - 2026-04-27
+
+### 🐛 Fixes
+- **Slack typing indicator** — Slack の `assistant.threads.setStatus` を90秒ごとに更新し、長時間のエンジン実行中も「入力中...」表示が消えにくいように変更。
+- **Slack status diagnostics** — typing status API の失敗を `warn` ログに出し、`missing_scope` / `no_permission` / `invalid_thread_ts` などの原因を確認しやすくしました。
+
 ## [2026.4.26] - 2026-04-26
 
 ### 🚀 リモートサーバー (Linux/systemd) 運用での詰まりポイントを一掃
