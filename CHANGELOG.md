@@ -2,6 +2,11 @@
 
 > **バージョン体系について**: 2026.4.26 から日付ベース (`YYYY.M.D`) のCalVerに移行しました。npm semver の制約上、月・日の leading zero は付けません (例: 4月26日 → `2026.4.26`)。
 
+## [2026.4.28] - 2026-04-28
+
+### ✨ Features
+- **`ryoko update`** — `npm install -g openryoko@latest` と `ryoko migrate --auto` を1コマンドで実行できるようにしました。`--no-migrate` でCLI更新だけも可能です。
+
 ## [2026.4.27] - 2026-04-27
 
 ### 🐛 Fixes

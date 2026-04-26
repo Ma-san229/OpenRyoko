@@ -82,7 +82,7 @@ ryoko setup
 ryoko start
 ```
 
-アップデートは `npm update -g openryoko`。
+アップデートは `ryoko update`。
 
 ### ソースから入れる（開発・改造向け）
 

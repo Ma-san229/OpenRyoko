@@ -91,6 +91,15 @@ program
   });
 
 program
+  .command("update")
+  .description("OpenRyoko CLIを最新版に更新し、インスタンス移行を適用する")
+  .option("--no-migrate", "CLI更新後の ryoko migrate --auto をスキップする")
+  .action(async (opts) => {
+    const { runUpdate } = await import("../src/cli/update.js");
+    await runUpdate(opts);
+  });
+
+program
   .command("migrate")
   .description("未適用のテンプレート・マイグレーションを適用する")
   .option("--check", "未適用のマイグレーションをチェックのみ（適用はしない）")
