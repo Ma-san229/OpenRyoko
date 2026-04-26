@@ -2,6 +2,9 @@
   "name": "openryoko",
   "private": true,
   "packageManager": "pnpm@10.6.4",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "turbo build && rm -rf packages/jimmy/dist/web && cp -r packages/web/out packages/jimmy/dist/web",
     "dev": "turbo dev",

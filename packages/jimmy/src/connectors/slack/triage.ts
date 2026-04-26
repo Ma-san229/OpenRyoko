@@ -11,6 +11,8 @@
 
 import { spawn } from "node:child_process";
 import { logger } from "../../shared/logger.js";
+import { resolveBin, formatSpawnError } from "../../shared/resolveBin.js";
+import { buildChildEnv } from "../../shared/childEnv.js";
 import {
   buildTriagePrompt,
   parseTriageDecision,
@@ -99,8 +101,10 @@ async function invokeClaudeOneShot(prompt: string, opts: InvokeOptions): Promise
       prompt,
     ];
 
-    const proc = opts.spawnFn(opts.bin, args, {
+    const resolvedBin = resolveBin(opts.bin);
+    const proc = opts.spawnFn(resolvedBin, args, {
       stdio: ["ignore", "pipe", "pipe"],
+      env: buildChildEnv(),
     });
 
     let stdout = "";
@@ -127,7 +131,7 @@ async function invokeClaudeOneShot(prompt: string, opts: InvokeOptions): Promise
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      reject(err);
+      reject(new Error(formatSpawnError("triage CLI", opts.bin, err)));
     });
 
     proc.on("close", (code) => {

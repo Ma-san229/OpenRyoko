@@ -570,9 +570,33 @@ export default function SettingsPage() {
     setFeedback(null)
     api
       .updateConfig(config)
-      .then(() =>
+      .then((response) => {
+        // Backend signals "partial" when the file was written but at least
+        // one connector failed to (re)start — typically a bad Slack token.
+        // Show the underlying errors so the user can fix them, instead of
+        // a misleading "Settings saved" toast.
+        const r = response as {
+          status?: string
+          connectorsReload?: { errors?: string[] }
+          connectorsReloadError?: string
+        }
+        if (r?.connectorsReloadError) {
+          setFeedback({
+            type: "error",
+            message: `Settings saved but connector reload failed: ${r.connectorsReloadError}`,
+          })
+          return
+        }
+        const reloadErrors = r?.connectorsReload?.errors ?? []
+        if (r?.status === "partial" || reloadErrors.length > 0) {
+          setFeedback({
+            type: "error",
+            message: `Settings saved but ${reloadErrors.length} connector(s) failed: ${reloadErrors.join("; ")}`,
+          })
+          return
+        }
         setFeedback({ type: "success", message: "Settings saved successfully" })
-      )
+      })
       .catch((err) =>
         setFeedback({
           type: "error",

@@ -166,152 +166,194 @@ export async function startGateway(
   /** IDs of connectors created from config.connectors.instances[] (vs legacy top-level connectors) */
   const instanceConnectorIds = new Set<string>();
 
-  if (config.connectors?.slack?.appToken && config.connectors?.slack?.botToken) {
-    try {
-      const slack = new SlackConnector(
-        {
-          appToken: config.connectors.slack.appToken,
-          botToken: config.connectors.slack.botToken,
-          allowFrom: config.connectors.slack.allowFrom,
-          ignoreOldMessagesOnBoot: config.connectors.slack.ignoreOldMessagesOnBoot,
-          triage: config.connectors.slack.triage,
-        },
-        {
-          portalName: config.portal?.portalName,
-          operatorName: config.portal?.operatorName,
-        },
-      );
-      slack.onMessage((msg) => {
-        const routeOpts: RouteOptions = {};
-        if (config.connectors.slack?.employee) {
-          const emp = employeeRegistry.get(config.connectors.slack.employee);
-          if (emp) routeOpts.employee = emp;
-        }
-        sessionManager.route(msg, slack, routeOpts).catch((err) => {
-          logger.error(`Slack route error: ${err instanceof Error ? err.message : err}`);
-        });
-      });
-      await slack.start();
-      connectors.push(slack);
-      connectorMap.set("slack", slack);
-    } catch (err) {
-      logger.error(`Failed to start Slack connector: ${err instanceof Error ? err.message : err}`);
+  // ---- Top-level connector start/stop helpers (closure over employeeRegistry, connectors, etc.) ----
+  // These are defined here so they can be reused by both initial startup AND
+  // reloadAllConnectors() when config.yaml changes (e.g. user saves new Slack
+  // tokens via the WebUI).
+
+  async function stopTopLevelConnectors(): Promise<{ stopped: string[]; errors: string[] }> {
+    const stopped: string[] = [];
+    const errors: string[] = [];
+    for (const [id, connector] of [...connectorMap.entries()]) {
+      // Instance-based connectors are handled by reloadConnectorInstances()
+      if (instanceConnectorIds.has(id)) continue;
+      try {
+        await connector.stop();
+        // stop() succeeded — safe to drop reference and let reload recreate.
+        connectorMap.delete(id);
+        const idx = connectors.indexOf(connector);
+        if (idx >= 0) connectors.splice(idx, 1);
+        stopped.push(id);
+        logger.info(`Stopped top-level connector "${id}" for reload`);
+      } catch (err) {
+        // stop() FAILED. Don't drop the reference: the underlying client
+        // (Slack websocket, Discord gateway, etc.) may still be live. If we
+        // recreated it now, we'd have two live clients processing the same
+        // events and sending duplicate replies. Better to surface a loud
+        // error and require a daemon restart for recovery.
+        const message = `stop() failed for top-level connector "${id}" — leaving in place to avoid duplicate replies. A full daemon restart may be required. Error: ${err instanceof Error ? err.message : err}`;
+        logger.error(message);
+        errors.push(message);
+      }
     }
+    return { stopped, errors };
   }
 
-  if (config.connectors?.discord?.proxyVia) {
-    // Remote mode: proxy all Discord operations through the primary instance
-    try {
-      const discord = new RemoteDiscordConnector({
-        proxyVia: config.connectors.discord.proxyVia,
-        channelId: config.connectors.discord.channelId,
-      });
-      discord.onMessage((msg) => {
-        const routeOpts: RouteOptions = {};
-        if (config.connectors.discord?.employee) {
-          const emp = employeeRegistry.get(config.connectors.discord.employee);
-          if (emp) routeOpts.employee = emp;
-        }
-        sessionManager.route(msg, discord, routeOpts).catch((err) => {
-          logger.error(`Discord route error: ${err instanceof Error ? err.message : err}`);
+  async function startTopLevelConnectorsFromConfig(
+    cfg: JinnConfig,
+  ): Promise<{ started: string[]; errors: string[] }> {
+    const started: string[] = [];
+    const errors: string[] = [];
+
+    if (
+      cfg.connectors?.slack?.appToken &&
+      cfg.connectors?.slack?.botToken &&
+      !connectorMap.has("slack")
+    ) {
+      try {
+        const slack = new SlackConnector(
+          {
+            appToken: cfg.connectors.slack.appToken,
+            botToken: cfg.connectors.slack.botToken,
+            allowFrom: cfg.connectors.slack.allowFrom,
+            ignoreOldMessagesOnBoot: cfg.connectors.slack.ignoreOldMessagesOnBoot,
+            triage: cfg.connectors.slack.triage,
+          },
+          {
+            portalName: cfg.portal?.portalName,
+            operatorName: cfg.portal?.operatorName,
+          },
+        );
+        slack.onMessage((msg) => {
+          const routeOpts: RouteOptions = {};
+          if (cfg.connectors.slack?.employee) {
+            const emp = employeeRegistry.get(cfg.connectors.slack.employee);
+            if (emp) routeOpts.employee = emp;
+          }
+          sessionManager.route(msg, slack, routeOpts).catch((err) => {
+            logger.error(`Slack route error: ${err instanceof Error ? err.message : err}`);
+          });
         });
-      });
-      await discord.start();
-      connectors.push(discord);
-      connectorMap.set("discord", discord);
-      logger.info("Discord remote connector started");
-    } catch (err) {
-      logger.error(`Failed to start remote Discord connector: ${err instanceof Error ? err.message : err}`);
+        await slack.start();
+        connectors.push(slack);
+        connectorMap.set("slack", slack);
+        started.push("slack");
+      } catch (err) {
+        const msg = `Failed to start Slack connector: ${err instanceof Error ? err.message : err}`;
+        logger.error(msg);
+        errors.push(msg);
+      }
     }
-  } else if (config.connectors?.discord?.botToken) {
-    // Primary mode: direct Discord bot connection
-    try {
-      const discord = new DiscordConnector(config.connectors.discord as DiscordConnectorConfig);
-      discord.onMessage((msg) => {
-        const routeOpts: RouteOptions = {};
-        if (config.connectors.discord?.employee) {
-          const emp = employeeRegistry.get(config.connectors.discord.employee);
-          if (emp) routeOpts.employee = emp;
-        }
-        sessionManager.route(msg, discord, routeOpts).catch((err) => {
-          logger.error(`Discord route error: ${err instanceof Error ? err.message : err}`);
+
+    if (cfg.connectors?.discord?.proxyVia && !connectorMap.has("discord")) {
+      try {
+        const discord = new RemoteDiscordConnector({
+          proxyVia: cfg.connectors.discord.proxyVia,
+          channelId: cfg.connectors.discord.channelId,
         });
-      });
-      await discord.start();
-      connectors.push(discord);
-      connectorMap.set("discord", discord);
-      logger.info("Discord connector started");
-    } catch (err) {
-      logger.error(`Failed to start Discord connector: ${err instanceof Error ? err.message : err}`);
-    }
-  } else if (config.connectors?.discord?.proxyVia) {
-    try {
-      const discord = new RemoteDiscordConnector({ proxyVia: config.connectors.discord.proxyVia });
-      discord.onMessage((msg) => {
-        const routeOpts: RouteOptions = {};
-        if (config.connectors.discord?.employee) {
-          const emp = employeeRegistry.get(config.connectors.discord.employee);
-          if (emp) routeOpts.employee = emp;
-        }
-        sessionManager.route(msg, discord, routeOpts).catch((err) => {
-          logger.error(`Discord (remote) route error: ${err instanceof Error ? err.message : err}`);
+        discord.onMessage((msg) => {
+          const routeOpts: RouteOptions = {};
+          if (cfg.connectors.discord?.employee) {
+            const emp = employeeRegistry.get(cfg.connectors.discord.employee);
+            if (emp) routeOpts.employee = emp;
+          }
+          sessionManager.route(msg, discord, routeOpts).catch((err) => {
+            logger.error(`Discord route error: ${err instanceof Error ? err.message : err}`);
+          });
         });
-      });
-      await discord.start();
-      connectors.push(discord);
-      connectorMap.set("discord", discord);
-      logger.info(`Discord connector started in remote mode (via ${config.connectors.discord.proxyVia})`);
-    } catch (err) {
-      logger.error(`Failed to start remote Discord connector: ${err instanceof Error ? err.message : err}`);
+        await discord.start();
+        connectors.push(discord);
+        connectorMap.set("discord", discord);
+        started.push("discord");
+        logger.info("Discord remote connector started");
+      } catch (err) {
+        const msg = `Failed to start remote Discord connector: ${err instanceof Error ? err.message : err}`;
+        logger.error(msg);
+        errors.push(msg);
+      }
+    } else if (cfg.connectors?.discord?.botToken && !connectorMap.has("discord")) {
+      try {
+        const discord = new DiscordConnector(cfg.connectors.discord as DiscordConnectorConfig);
+        discord.onMessage((msg) => {
+          const routeOpts: RouteOptions = {};
+          if (cfg.connectors.discord?.employee) {
+            const emp = employeeRegistry.get(cfg.connectors.discord.employee);
+            if (emp) routeOpts.employee = emp;
+          }
+          sessionManager.route(msg, discord, routeOpts).catch((err) => {
+            logger.error(`Discord route error: ${err instanceof Error ? err.message : err}`);
+          });
+        });
+        await discord.start();
+        connectors.push(discord);
+        connectorMap.set("discord", discord);
+        started.push("discord");
+        logger.info("Discord connector started");
+      } catch (err) {
+        const msg = `Failed to start Discord connector: ${err instanceof Error ? err.message : err}`;
+        logger.error(msg);
+        errors.push(msg);
+      }
     }
+
+    if (cfg.connectors?.telegram?.botToken && !connectorMap.has("telegram")) {
+      try {
+        const telegram = new TelegramConnector({
+          botToken: cfg.connectors.telegram.botToken,
+          allowFrom: cfg.connectors.telegram.allowFrom,
+          ignoreOldMessagesOnBoot: cfg.connectors.telegram.ignoreOldMessagesOnBoot,
+        });
+        telegram.onMessage((msg) => {
+          const routeOpts: RouteOptions = {};
+          if (cfg.connectors.telegram?.employee) {
+            const emp = employeeRegistry.get(cfg.connectors.telegram.employee);
+            if (emp) routeOpts.employee = emp;
+          }
+          sessionManager.route(msg, telegram, routeOpts).catch((err) => {
+            logger.error(`Telegram route error: ${err instanceof Error ? err.message : err}`);
+          });
+        });
+        await telegram.start();
+        connectors.push(telegram);
+        connectorMap.set("telegram", telegram);
+        started.push("telegram");
+      } catch (err) {
+        const msg = `Failed to start Telegram connector: ${err instanceof Error ? err.message : err}`;
+        logger.error(msg);
+        errors.push(msg);
+      }
+    }
+
+    if (cfg.connectors?.whatsapp && !connectorMap.has("whatsapp")) {
+      try {
+        const whatsapp = new WhatsAppConnector(cfg.connectors.whatsapp ?? {});
+        whatsapp.onMessage((msg) => {
+          const routeOpts: RouteOptions = {};
+          if (cfg.connectors.whatsapp?.employee) {
+            const emp = employeeRegistry.get(cfg.connectors.whatsapp.employee);
+            if (emp) routeOpts.employee = emp;
+          }
+          sessionManager.route(msg, whatsapp, routeOpts).catch((err) => {
+            logger.error(`WhatsApp route error: ${err instanceof Error ? err.message : err}`);
+          });
+        });
+        await whatsapp.start();
+        connectors.push(whatsapp);
+        connectorMap.set("whatsapp", whatsapp);
+        started.push("whatsapp");
+        logger.info("WhatsApp connector started (scan QR code if first run)");
+      } catch (err) {
+        const msg = `Failed to start WhatsApp connector: ${err instanceof Error ? err.message : err}`;
+        logger.error(msg);
+        errors.push(msg);
+      }
+    }
+
+    return { started, errors };
   }
 
-  if (config.connectors?.telegram?.botToken) {
-    try {
-      const telegram = new TelegramConnector({
-        botToken: config.connectors.telegram.botToken,
-        allowFrom: config.connectors.telegram.allowFrom,
-        ignoreOldMessagesOnBoot: config.connectors.telegram.ignoreOldMessagesOnBoot,
-      });
-      telegram.onMessage((msg) => {
-        const routeOpts: RouteOptions = {};
-        if (config.connectors.telegram?.employee) {
-          const emp = employeeRegistry.get(config.connectors.telegram.employee);
-          if (emp) routeOpts.employee = emp;
-        }
-        sessionManager.route(msg, telegram, routeOpts).catch((err) => {
-          logger.error(`Telegram route error: ${err instanceof Error ? err.message : err}`);
-        });
-      });
-      await telegram.start();
-      connectors.push(telegram);
-      connectorMap.set("telegram", telegram);
-    } catch (err) {
-      logger.error(`Failed to start Telegram connector: ${err instanceof Error ? err.message : err}`);
-    }
-  }
-
-  if (config.connectors?.whatsapp) {
-    try {
-      const whatsapp = new WhatsAppConnector(config.connectors.whatsapp ?? {});
-      whatsapp.onMessage((msg) => {
-        const routeOpts: RouteOptions = {};
-        if (config.connectors.whatsapp?.employee) {
-          const emp = employeeRegistry.get(config.connectors.whatsapp.employee);
-          if (emp) routeOpts.employee = emp;
-        }
-        sessionManager.route(msg, whatsapp, routeOpts).catch((err) => {
-          logger.error(`WhatsApp route error: ${err instanceof Error ? err.message : err}`);
-        });
-      });
-      await whatsapp.start();
-      connectors.push(whatsapp);
-      connectorMap.set("whatsapp", whatsapp);
-      logger.info("WhatsApp connector started (scan QR code if first run)");
-    } catch (err) {
-      logger.error(`Failed to start WhatsApp connector: ${err instanceof Error ? err.message : err}`);
-    }
-  }
+  // Initial top-level connector startup
+  await startTopLevelConnectorsFromConfig(config);
 
   // Process named connector instances (allows multiple connectors of the same type)
   if (config.connectors?.instances) {
@@ -416,26 +458,20 @@ export async function startGateway(
   sessionManager.setConnectorProvider(() => connectorMap);
 
   // Reload connector instances from config (stop old instances, start new ones)
-  async function reloadConnectorInstances(): Promise<{ started: string[]; stopped: string[]; errors: string[] }> {
-    const freshConfig = loadConfig();
-    const started: string[] = [];
+  /**
+   * Stop only the instance-based connectors. Split out from the legacy
+   * combined reload so reloadAllConnectors() can interleave: stop top-level
+   * + stop instances → start top-level → start instances. That order
+   * preserves boot-time precedence (top-level wins for duplicate ids).
+   */
+  async function stopInstanceConnectors(): Promise<{ stopped: string[]; errors: string[] }> {
     const stopped: string[] = [];
     const errors: string[] = [];
-
-    // Find instance-based connectors (keys that came from instances array)
-    const instanceIds = new Set<string>();
-    if (freshConfig.connectors?.instances) {
-      for (const inst of freshConfig.connectors.instances) {
-        if (inst.id) instanceIds.add(inst.id);
-      }
-    }
-
-    // Stop old instance connectors that are no longer in config or need refresh
-    for (const [id, connector] of connectorMap.entries()) {
-      // Skip legacy (top-level) connectors — only reload instance-based ones
+    for (const [id, connector] of [...connectorMap.entries()]) {
       if (!instanceConnectorIds.has(id)) continue;
       try {
         await connector.stop();
+        // stop() succeeded — safe to drop reference and let restart create afresh.
         connectorMap.delete(id);
         instanceConnectorIds.delete(id);
         const idx = connectors.indexOf(connector);
@@ -443,11 +479,21 @@ export async function startGateway(
         stopped.push(id);
         logger.info(`Stopped connector instance "${id}" for reload`);
       } catch (err) {
-        errors.push(`Failed to stop ${id}: ${err instanceof Error ? err.message : err}`);
+        // stop() FAILED. Same reasoning as stopTopLevelConnectors: leave
+        // the reference in place rather than risk duplicate live clients.
+        const message = `stop() failed for instance "${id}" — leaving in place to avoid duplicate replies. A full daemon restart may be required. Error: ${err instanceof Error ? err.message : err}`;
+        logger.error(message);
+        errors.push(message);
       }
     }
+    return { stopped, errors };
+  }
 
-    // Start new instances from fresh config
+  async function startConfiguredInstances(
+    freshConfig: JinnConfig,
+  ): Promise<{ started: string[]; errors: string[] }> {
+    const started: string[] = [];
+    const errors: string[] = [];
     if (freshConfig.connectors?.instances) {
       for (const instance of freshConfig.connectors.instances) {
         const { id, type, employee, ...typeConfig } = instance;
@@ -476,9 +522,11 @@ export async function startGateway(
             }
             case "slack": {
               const slackConfig = { ...typeConfig, id } as any;
+              // Use freshConfig.portal (not the closure-captured boot-time
+              // `config`) so renamed portals show up after a hot-reload.
               const slack = new SlackConnector(slackConfig, {
-                portalName: config.portal?.portalName,
-                operatorName: config.portal?.operatorName,
+                portalName: freshConfig.portal?.portalName,
+                operatorName: freshConfig.portal?.operatorName,
               });
               slack.onMessage((msg) => {
                 const routeOpts: RouteOptions = {};
@@ -543,7 +591,103 @@ export async function startGateway(
       }
     }
 
-    return { started, stopped, errors };
+    return { started, errors };
+  }
+
+  /**
+   * Backwards-compatible wrapper: stop+start instances in one call. Used by
+   * the `POST /api/connectors/reload` endpoint and exposed via ApiContext
+   * for any external consumer that still calls reloadConnectorInstances().
+   */
+  async function reloadConnectorInstances(
+    preloadedConfig?: JinnConfig,
+  ): Promise<{ started: string[]; stopped: string[]; errors: string[] }> {
+    const fresh = preloadedConfig ?? loadConfig();
+    const stopRes = await stopInstanceConnectors();
+    const startRes = await startConfiguredInstances(fresh);
+    return {
+      started: startRes.started,
+      stopped: stopRes.stopped,
+      errors: [...stopRes.errors, ...startRes.errors],
+    };
+  }
+
+  /**
+   * Stop and re-initialize ALL connectors (top-level + instance-based) from
+   * the on-disk config. Called automatically when ~/.ryoko/config.yaml
+   * changes via the chokidar watcher, and via POST /api/connectors/reload.
+   *
+   * This is what makes "save Slack tokens in WebUI → bot reconnects" work
+   * without a daemon restart. Previously only instance-based connectors
+   * were reloaded, so editing top-level slack tokens required `ryoko stop`
+   * + `ryoko start`.
+   */
+  async function doReloadOnce(): Promise<{ started: string[]; stopped: string[]; errors: string[] }> {
+    const fresh = loadConfig();
+    // Push fresh config into the SessionManager so new sessions see new
+    // engines.default / portal.* / bin paths. Callers (watcher / API) are
+    // responsible for updating apiContext.config too.
+    currentConfig = fresh;
+    sessionManager.setConfig(fresh);
+
+    // Order:
+    //   1. Stop old top-level + old instance connectors (clear the map).
+    //   2. Start top-level FIRST (matches boot precedence: if a duplicate
+    //      id exists in both forms, the legacy top-level wins).
+    //   3. Start instances last — same `!connectorMap.has(...)` guard as
+    //      boot, so duplicate-id instances are skipped, not the top-level.
+    const stopTopRes = await stopTopLevelConnectors();
+    const stopInstRes = await stopInstanceConnectors();
+    const startTopRes = await startTopLevelConnectorsFromConfig(fresh);
+    const startInstRes = await startConfiguredInstances(fresh);
+    // Refresh the connector names baked into engine system prompts.
+    sessionManager.setConnectorNames(Array.from(connectorMap.keys()));
+
+    const result = {
+      started: [...startTopRes.started, ...startInstRes.started],
+      stopped: [...stopTopRes.stopped, ...stopInstRes.stopped],
+      errors: [
+        ...stopTopRes.errors,
+        ...stopInstRes.errors,
+        ...startTopRes.errors,
+        ...startInstRes.errors,
+      ],
+    };
+
+    // Only mark this config as "successfully applied" when no errors arose.
+    // Otherwise the watcher's next event (after clearSuppressNextConnectorReload
+    // in the API failure path) would diff fresh-vs-fresh and skip the retry.
+    if (result.errors.length === 0) {
+      lastConnectorReloadConfig = fresh;
+    }
+    return result;
+  }
+
+  async function reloadAllConnectors(): Promise<{ started: string[]; stopped: string[]; errors: string[] }> {
+    // Coalesce concurrent callers: if a reload is in flight, mark a follow-up
+    // so newer config (the second caller's intent) gets picked up after the
+    // current one completes — and return the in-flight promise's result.
+    // Without this, two overlapping reloads can both observe an empty map
+    // after their respective stop pass and start duplicate live clients.
+    if (reloadInFlight) {
+      pendingReload = true;
+      return reloadInFlight;
+    }
+    reloadInFlight = (async () => {
+      try {
+        let result = await doReloadOnce();
+        // Drain any reload requests that arrived during this run, with
+        // the most recent on-disk config. Keep going until quiet.
+        while (pendingReload) {
+          pendingReload = false;
+          result = await doReloadOnce();
+        }
+        return result;
+      } finally {
+        reloadInFlight = null;
+      }
+    })();
+    return reloadInFlight;
   }
 
   // Start cron scheduler
@@ -553,6 +697,42 @@ export async function startGateway(
 
   // Mutable config reference for hot-reload
   let currentConfig = config;
+  // Tracks the config version that was last successfully applied to connectors.
+  // The watcher diffs against THIS (not currentConfig) so that a failed reload
+  // does not poison the next chokidar event into thinking "nothing changed".
+  let lastConnectorReloadConfig = config;
+
+  // Single-flight gate for connector reloads: any caller that arrives while
+  // one is in flight is coalesced (no duplicate clients), and any reload
+  // request received during a run schedules a single follow-up so newer
+  // config doesn't get lost.
+  let reloadInFlight: Promise<{ started: string[]; stopped: string[]; errors: string[] }> | null = null;
+  let pendingReload = false;
+
+  // Coordination flag between the API config-save path and the file watcher.
+  // PUT /api/config eagerly reloads connectors for snappy UX, then sets this
+  // flag so the chokidar event for the same file write doesn't double-reload
+  // and race against the in-flight reload.
+  let suppressNextWatcherConnectorReload = false;
+  let suppressTimer: ReturnType<typeof setTimeout> | null = null;
+  function suppressNextConnectorReload(): void {
+    suppressNextWatcherConnectorReload = true;
+    if (suppressTimer) clearTimeout(suppressTimer);
+    // Auto-clear after 3s in case the watcher event never arrives (the file
+    // write was rolled back, chokidar missed it, etc.) — we don't want to
+    // permanently suppress legitimate future reloads.
+    suppressTimer = setTimeout(() => {
+      suppressNextWatcherConnectorReload = false;
+      suppressTimer = null;
+    }, 3000);
+  }
+  function clearSuppressNextConnectorReload(): void {
+    suppressNextWatcherConnectorReload = false;
+    if (suppressTimer) {
+      clearTimeout(suppressTimer);
+      suppressTimer = null;
+    }
+  }
 
   const startTime = Date.now();
 
@@ -581,6 +761,9 @@ export async function startGateway(
     emit,
     connectors: connectorMap,
     reloadConnectorInstances,
+    reloadAllConnectors,
+    suppressNextConnectorReload,
+    clearSuppressNextConnectorReload,
   };
 
   // Replay any pending web queue items (e.g. gateway restart mid-run)
@@ -666,10 +849,62 @@ export async function startGateway(
   startWatchers({
     onConfigReload: () => {
       try {
+        const previous = currentConfig;
         currentConfig = loadConfig();
         apiContext.config = currentConfig;
+        // Propagate the fresh config into SessionManager so new sessions
+        // pick up edits to engines.default / portal.* / engine bin paths
+        // even when the connectors block didn't change.
+        sessionManager.setConfig(currentConfig);
         logger.info("Config reloaded successfully");
         emit("config:reloaded", {});
+
+        // If the API just wrote this file (PUT /api/config) it has already
+        // triggered reloadAllConnectors itself and may still be mid-reconnect.
+        // Skip our reload to avoid stop→start→stop→start churn and the
+        // race that comes with two overlapping reloads.
+        if (suppressNextWatcherConnectorReload) {
+          suppressNextWatcherConnectorReload = false;
+          if (suppressTimer) {
+            clearTimeout(suppressTimer);
+            suppressTimer = null;
+          }
+          logger.debug("Skipping watcher-triggered connector reload (API just wrote config and reloaded)");
+          return;
+        }
+
+        // External edits to ~/.ryoko/config.yaml (vim, ryoko CLI, etc.) need
+        // a connector refresh when either:
+        //   (a) the connectors block changed, OR
+        //   (b) portal.portalName/operatorName changed — Slack connectors
+        //       capture those at construction so the live ones would keep
+        //       triaging with the old portal identity until restart.
+        //
+        // Diff against lastConnectorReloadConfig (NOT `previous`) so that a
+        // failed previous reload doesn't poison this comparison: if the
+        // last successful reload was config v1 and we've since written v2
+        // unsuccessfully, comparing v2-vs-v2 would skip the retry.
+        const baseline = lastConnectorReloadConfig;
+        const portalNamesChanged =
+          baseline.portal?.portalName !== currentConfig.portal?.portalName ||
+          baseline.portal?.operatorName !== currentConfig.portal?.operatorName;
+        const connectorsChanged =
+          JSON.stringify(baseline.connectors ?? null) !==
+          JSON.stringify(currentConfig.connectors ?? null);
+        if (connectorsChanged || portalNamesChanged) {
+          reloadAllConnectors()
+            .then((result) => {
+              logger.info(
+                `Connectors reloaded after config change — started=[${result.started.join(",")}] stopped=[${result.stopped.join(",")}] errors=${result.errors.length}`,
+              );
+              emit("connectors:reloaded", result);
+            })
+            .catch((err) => {
+              logger.error(
+                `reloadAllConnectors failed: ${err instanceof Error ? err.message : err}`,
+              );
+            });
+        }
       } catch (err) {
         logger.error(
           `Failed to reload config: ${err instanceof Error ? err.message : err}`,

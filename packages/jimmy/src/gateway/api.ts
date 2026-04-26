@@ -61,6 +61,26 @@ export interface ApiContext {
   emit: (event: string, payload: unknown) => void;
   connectors: Map<string, import("../shared/types.js").Connector>;
   reloadConnectorInstances?: () => Promise<{ started: string[]; stopped: string[]; errors: string[] }>;
+  /**
+   * Reload BOTH top-level (slack/discord/telegram/whatsapp) and instance-based
+   * connectors from the current on-disk config. Use this when config.yaml
+   * changes — particularly Slack tokens saved via the WebUI.
+   */
+  reloadAllConnectors?: () => Promise<{ started: string[]; stopped: string[]; errors: string[] }>;
+  /**
+   * Tell the file watcher to ignore the next config-change event for the
+   * purpose of triggering a connector reload. Call this *before* writing to
+   * ~/.ryoko/config.yaml when the same code path is also going to call
+   * reloadAllConnectors() itself — without it the watcher will fire ~500ms
+   * later and start a redundant disconnect/reconnect cycle.
+   */
+  suppressNextConnectorReload?: () => void;
+  /**
+   * Cancel a previously-armed {@link suppressNextConnectorReload}. Used in
+   * the failure path of an eager reload so the watcher is allowed to retry
+   * instead of being permanently silenced for the next event.
+   */
+  clearSuppressNextConnectorReload?: () => void;
 }
 
 export function resumePendingWebQueueItems(context: ApiContext): void {
@@ -1311,8 +1331,79 @@ Handle this as a priority request from a colleague.`;
       } catch { /* start fresh if unreadable */ }
       const merged = deepMerge(existing, body);
       const yamlStr = yaml.dump(merged);
+
+      // Compare AGAINST THE MERGED config, not the request body — partial
+      // updates (e.g. saving only "portal.portalName") leave body.connectors
+      // undefined, which would falsely look like the connectors block was
+      // wiped. Use the deep-merged result so we only reload when the
+      // effective on-disk values actually changed.
+      //
+      // We also reload connectors when portal.portalName / portal.operatorName
+      // change, because SlackConnector captures those at construction and
+      // would otherwise keep displaying the old portal name in triage prompts
+      // until a daemon restart.
+      const portalSliceChanged = (() => {
+        const prev = (existing as { portal?: Record<string, unknown> }).portal ?? {};
+        const next = (merged as { portal?: Record<string, unknown> }).portal ?? {};
+        return prev.portalName !== next.portalName || prev.operatorName !== next.operatorName;
+      })();
+      const connectorsChanged =
+        JSON.stringify(existing.connectors ?? null) !==
+          JSON.stringify((merged as Record<string, unknown>).connectors ?? null) ||
+        portalSliceChanged;
+
+      // Tell the watcher to skip its connector-reload reaction for the file
+      // write we're about to do — we'll handle the reload ourselves below
+      // so the user's "Save" feels instant. Without this, the watcher would
+      // fire ~500ms later and start a redundant disconnect/reconnect cycle.
+      if (connectorsChanged) {
+        context.suppressNextConnectorReload?.();
+      }
+
       fs.writeFileSync(CONFIG_PATH, yamlStr);
       logger.info("Config updated via API");
+
+      if (connectorsChanged && context.reloadAllConnectors) {
+        try {
+          const reload = await context.reloadAllConnectors();
+          // reloadAllConnectors() already updated currentConfig + sessionManager
+          // internally. Make sure apiContext.config (returned by GET /api/config)
+          // reflects the on-disk merge too — without this, the GET handler
+          // would return the previous snapshot until the (suppressed) watcher
+          // event fires.
+          context.config = context.getConfig();
+          context.emit("connectors:reloaded", reload);
+          // reloadAllConnectors() collects per-connector start/stop failures
+          // into reload.errors instead of throwing. Surface them clearly so
+          // the UI doesn't show a misleading "Settings saved" toast when
+          // the new Slack token actually failed to authenticate.
+          const status = reload.errors.length > 0 ? "partial" : "ok";
+          if (status === "partial") {
+            logger.warn(
+              `Config saved but ${reload.errors.length} connector(s) failed to (re)start: ${reload.errors.join(" | ")}`,
+            );
+            // Allow the chokidar event for the file we just wrote to fire
+            // a second reload attempt — useful for transient failures
+            // (network blip during Slack reconnect, brief Discord gateway
+            // outage, etc.). For permanent failures (bad token), the second
+            // attempt will fail the same way; no harm done.
+            context.clearSuppressNextConnectorReload?.();
+          }
+          return json(res, { status, connectorsReload: reload });
+        } catch (err) {
+          // Eager reload failed. Re-arm the watcher so the chokidar event
+          // for the file we just wrote is NOT suppressed — it's now our only
+          // chance to retry connector reload before the next external edit
+          // or manual /api/connectors/reload. (suppressNextConnectorReload
+          // was armed above; clearing it via a fresh suppress with 0 effect
+          // isn't possible, so we expose a clear() instead via the API.)
+          context.clearSuppressNextConnectorReload?.();
+          const message = err instanceof Error ? err.message : String(err);
+          logger.error(`Eager connector reload after config save failed: ${message}`);
+          return json(res, { status: "ok", connectorsReloadError: message });
+        }
+      }
+
       return json(res, { status: "ok" });
     }
 
@@ -1334,13 +1425,16 @@ Handle this as a priority request from a colleague.`;
       return json(res, { lines });
     }
 
-    // POST /api/connectors/reload — stop all instance connectors and restart from config
+    // POST /api/connectors/reload — restart ALL connectors (top-level + instances)
+    // from the on-disk config. Falls back to instance-only reload if the gateway
+    // wasn't built with reloadAllConnectors (older daemon mid-upgrade).
     if (method === "POST" && pathname === "/api/connectors/reload") {
-      if (!context.reloadConnectorInstances) {
+      const reload = context.reloadAllConnectors ?? context.reloadConnectorInstances;
+      if (!reload) {
         return json(res, { error: "Connector reload not available" }, 501);
       }
       try {
-        const result = await context.reloadConnectorInstances();
+        const result = await reload();
         context.emit("connectors:reloaded", result);
         return json(res, result);
       } catch (err) {

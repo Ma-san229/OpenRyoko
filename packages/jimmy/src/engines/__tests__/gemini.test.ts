@@ -442,7 +442,7 @@ describe("GeminiEngine", () => {
       );
     });
 
-    it("should default bin to 'gemini'", async () => {
+    it("should default bin to 'gemini' (absolute path on systems where it's on PATH)", async () => {
       const proc = createMockProcess();
       mockSpawn.mockReturnValue(proc as any);
 
@@ -453,8 +453,10 @@ describe("GeminiEngine", () => {
       proc.emit("close", 0);
 
       await resultPromise;
+      // resolveBin() may return either the bare name (PATH miss) or an
+      // absolute path ending in "/gemini" (PATH hit). Accept either.
       expect(mockSpawn).toHaveBeenCalledWith(
-        "gemini",
+        expect.stringMatching(/(^|\/|\\)gemini(\.exe)?$/),
         expect.any(Array),
         expect.any(Object),
       );

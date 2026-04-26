@@ -122,6 +122,26 @@ export class SessionManager {
     this.connectorProvider = provider;
   }
 
+  /**
+   * Replace the list of connector names that gets injected into engine
+   * context (system prompt). Call this after a hot-reload of connectors so
+   * sessions started post-reload see the current set, not the boot-time set.
+   */
+  setConnectorNames(names: string[]): void {
+    this.connectorNames = [...names];
+  }
+
+  /**
+   * Replace the active config object. Call this after ~/.ryoko/config.yaml
+   * is reloaded so new sessions see fresh values for engines.default,
+   * portal.portalName, engine bin paths, etc. — without it, every session
+   * created after a Settings save would silently use boot-time values until
+   * the daemon is restarted.
+   */
+  setConfig(config: JinnConfig): void {
+    this.config = config;
+  }
+
   getEngine(name: string): Engine | undefined {
     return this.engines.get(name);
   }

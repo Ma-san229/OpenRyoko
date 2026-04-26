@@ -207,6 +207,47 @@ pnpm dev     # ゲートウェイ + Next.js dev サーバーをホットリロ�
 | `pnpm lint` | 全パッケージを lint |
 | `pnpm clean` | ビルド成果物を削除 |
 
+## 🖥️ Linux サーバーで常駐させる（systemd）
+
+VPS等で 24/7 稼働させたい場合、`scripts/systemd/` に systemd unit テンプレートと
+インストーラを用意しています。これを使えば「`spawn claude ENOENT`」「rootだとClaude
+CLIに弾かれる」「クラッシュ後に手動で立ち上げ直し」といったお決まりの落とし穴を
+回避できます。
+
+```bash
+# 1. 専用ユーザーを作成（rootで動かさない）
+sudo useradd -m -s /bin/bash ryoko
+
+# 2. その ryoko ユーザーで Node 22+ と OpenRyoko をインストール
+sudo -u ryoko -i bash -lc '
+  curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+  source ~/.nvm/nvm.sh
+  nvm install 22
+  npm install -g openryoko @anthropic-ai/claude-code
+  ryoko setup
+'
+
+# 3. systemd unit を /etc/systemd/system/ に配置して enable
+sudo ./scripts/systemd/install.sh ryoko
+
+# 4. ログ追跡
+journalctl -u openryoko -f
+```
+
+`install.sh` は対象ユーザーの PATH（nvm の Node ディレクトリ含む）を自動検出して
+unit ファイルに焼き込みます。手動で `openryoko.service` をコピーする場合は、
+テンプレート先頭のコメント（User / WorkingDirectory / Environment=PATH=… /
+ExecStart）を必ず編集してください。
+
+> **rootで動かしたい場合**: 非推奨ですが、OpenRyoko が `IS_SANDBOX=1` を自動付与
+> するので Claude CLI の root 拒否はバイパスされます。それでも専用ユーザー運用を強く推奨します。
+
+## ⚙️ Web UI からの設定変更
+
+ダッシュボードの Settings 画面で Slack トークン等を保存すると、`~/.ryoko/config.yaml`
+が更新されたあと自動でコネクタが再接続されます（v0.9.5 以降）。デーモン再起動は
+不要です。手動で再接続したい場合は `POST /api/connectors/reload` を叩けます。
+
 ## 🔗 Jinn からの移行
 
 既に `~/.jinn/` で Jinn を運用している場合、OpenRyoko は初回起動時に自動でディレクトリを `~/.ryoko/` にリネームします。トークン・セッション履歴・スキル・組織ファイルはすべてそのまま引き継がれます。

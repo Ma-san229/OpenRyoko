@@ -1,5 +1,35 @@
 # Changelog
 
+> **バージョン体系について**: 2026.4.26 から日付ベース (`YYYY.M.D`) のCalVerに移行しました。npm semver の制約上、月・日の leading zero は付けません (例: 4月26日 → `2026.4.26`)。
+
+## [2026.4.26] - 2026-04-26
+
+### 🚀 リモートサーバー (Linux/systemd) 運用での詰まりポイントを一掃
+
+VPS等で常駐させようとした初期ユーザーが踏んだ4つの落とし穴を全部潰しました。
+
+#### 🐛 Fixes
+- **`spawn claude ENOENT` (systemd配下)** — エンジン (Claude/Codex/Gemini) およびSlackトリアージのCLI起動を、起動時に純JSのPATH探索 (`shared/resolveBin.ts`) で絶対パス化するように変更。systemdの最小PATHでも動作。解決失敗時はインストールコマンド付きの親切なエラーを返す。
+- **rootユーザーでClaude CLI拒否** — `shared/childEnv.ts` でuid==0検出時に `IS_SANDBOX=1` を自動付与しバイパス。同時に「root実行は非推奨、専用ユーザーを推奨」の警告ログを一度だけ出力。
+- **WebUI Settingsで Slack トークン保存しても繋がらない** — `PUT /api/config` および `chokidar` watcher が、`connectors` または `portal.portalName/operatorName` の差分を検知すると `reloadAllConnectors()` を呼んでトップレベル＋インスタンスSlack/Discord/Telegram/WhatsAppコネクタを再接続。デーモン再起動不要。partial失敗 (例: 不正トークン) はUIにエラー表示。
+- **クラッシュ後の自動復旧なし** — `scripts/systemd/openryoko.service` テンプレと `scripts/systemd/install.sh` を追加。`Restart=on-failure` + `RestartSec=5` で自動復旧。インストーラはユーザーの実シェル (bash/zsh/fish) でPATHを自動検出してunit fileに焼き込む。
+
+#### 🏗️ Infrastructure
+- `engines.node: ">=22"` を root / `packages/jimmy` / `packages/web` の package.json に明示。
+- READMEに「🖥️ Linux サーバーで常駐させる (systemd)」セクションを追加。
+- `SessionManager.setConfig()` / `setConnectorNames()` を追加 — config再読み込み時にセッションが boot 時の値を引きずる問題を解消。
+- 連結器reloadを single-flight 化 (`reloadInFlight` mutex + pending coalescing) — 並行reload時の二重起動を防止。
+- 連結器の停止 (`stop()`) が失敗した場合、参照を破棄せず手動再起動を案内 — 二重ライブクライアントによる重複応答を防止。
+- API経由のconfig書き込み時に watcher の重複reloadを抑制 (`suppressNextConnectorReload`)、partial失敗時は抑制を解除して chokidar の retry チャンスを残す。
+
+#### 🔒 Security
+- `resolveBin` で `command -v ${bin}` のシェル展開を撤廃し、純JSの `process.env.PATH` 走査に置換。`engines.*.bin` を `PUT /api/config` 経由で書き換えられるため、シェルメタ文字を含む値で任意コマンド実行できてしまう脆弱性を修正。
+- 同時に bin 名に `/`, `\`, NULL バイトを含む値を拒否 (path traversal 防御)。
+
+#### ✅ Tests
+- 新規: `shared/__tests__/resolveBin.test.ts` (絶対パス・PATH解決・コマンドインジェクション耐性)、`shared/__tests__/childEnv.test.ts` (root検出と IS_SANDBOX 注入)、`sessions/__tests__/manager-connector-names.test.ts` (setConnectorNames)
+- jimmy: 23 files / **275 tests**、web: 7 files / 61 tests、すべて pass。
+
 ## [0.9.4-ryoko.2] - 2026-04-22
 
 ### 🐛 Fixes

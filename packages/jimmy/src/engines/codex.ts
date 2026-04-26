@@ -1,6 +1,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import type { InterruptibleEngine, EngineRunOpts, EngineResult, StreamDelta } from "../shared/types.js";
 import { logger } from "../shared/logger.js";
+import { resolveBin, formatSpawnError } from "../shared/resolveBin.js";
+import { buildChildEnv } from "../shared/childEnv.js";
 
 interface LiveProcess {
   proc: ChildProcess;
@@ -45,7 +47,8 @@ export class CodexEngine implements InterruptibleEngine {
       prompt += "\n\nAttached files:\n" + opts.attachments.map((a) => `- ${a}`).join("\n");
     }
 
-    const bin = opts.bin || "codex";
+    const requestedBin = opts.bin || "codex";
+    const bin = resolveBin(requestedBin);
     const isResume = !!opts.resumeSessionId;
     const args = isResume
       ? this.buildResumeArgs(opts, prompt)
@@ -55,7 +58,7 @@ export class CodexEngine implements InterruptibleEngine {
       `Codex engine starting: ${bin} ${args[0]}${isResume ? " resume" : ""} --model ${opts.model || "default"} (resume: ${opts.resumeSessionId || "none"})`,
     );
 
-    const cleanEnv = this.buildCleanEnv();
+    const cleanEnv = buildChildEnv({ stripPrefixes: ["CODEX_"], stripExact: ["CODEX"] });
 
     return new Promise((resolve, reject) => {
       const proc = spawn(bin, args, {
@@ -198,7 +201,10 @@ export class CodexEngine implements InterruptibleEngine {
         if (settled) return;
         settled = true;
         this.liveProcesses.delete(sessionId);
-        reject(new Error(`Failed to spawn Codex CLI: ${err.message}`));
+        const errMsg = formatSpawnError("Codex CLI", requestedBin, err);
+        logger.error(errMsg);
+        opts.onStream?.({ type: "error", content: errMsg });
+        reject(new Error(errMsg));
       });
     });
   }
@@ -363,16 +369,6 @@ export class CodexEngine implements InterruptibleEngine {
     }
 
     return null;
-  }
-
-  private buildCleanEnv(): Record<string, string> {
-    const cleanEnv: Record<string, string> = {};
-    for (const [k, v] of Object.entries(process.env)) {
-      if (k === "CLAUDECODE" || k.startsWith("CLAUDE_CODE_")) continue;
-      if (k === "CODEX" || k.startsWith("CODEX_")) continue;
-      if (v !== undefined) cleanEnv[k] = v;
-    }
-    return cleanEnv;
   }
 
   private signalProcess(proc: ChildProcess, signal: NodeJS.Signals): void {
