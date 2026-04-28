@@ -40,7 +40,7 @@ class ChatErrorBoundary extends React.Component<{ children: React.ReactNode }, {
       return (
         <PageLayout>
           <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
-            <p className="text-lg font-semibold text-[var(--system-red)]">Chat crashed</p>
+            <p className="text-lg font-semibold text-[var(--system-red)]">チャットがクラッシュしました</p>
             <pre className="max-w-lg overflow-auto rounded-lg bg-[var(--bg-tertiary)] p-4 text-left text-xs text-muted-foreground">
               {this.state.error.message}{'\n'}{this.state.error.stack?.split('\n').slice(0, 5).join('\n')}
             </pre>
@@ -48,7 +48,7 @@ class ChatErrorBoundary extends React.Component<{ children: React.ReactNode }, {
               onClick={() => { this.setState({ error: null }); window.location.reload() }}
               className="rounded-md bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white"
             >
-              Reload
+              再読み込み
             </button>
           </div>
         </PageLayout>
@@ -423,11 +423,11 @@ function ChatPage() {
           </button>
           <div className="my-0.5 border-t border-border" />
           <button
-            onClick={() => { setShowMoreMenu(false); if (selectedId && window.confirm('Delete this session?')) handleDeleteSession(selectedId) }}
+            onClick={() => { setShowMoreMenu(false); if (selectedId && window.confirm('このセッションを削除しますか？')) handleDeleteSession(selectedId) }}
             className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--system-red)] transition-colors hover:bg-accent"
           >
             <Trash2 className="size-3.5" />
-            <span className="flex-1">Delete Session</span>
+            <span className="flex-1">セッションを削除</span>
             <kbd className="font-mono text-[10px] text-[var(--text-quaternary)]">⌫</kbd>
           </button>
         </div>

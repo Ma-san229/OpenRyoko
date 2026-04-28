@@ -92,19 +92,19 @@ function buildMigrateArgs(engine: string, prompt: string): string[] {
 export async function runMigrate(opts: { check?: boolean; auto?: boolean }): Promise<void> {
   // Ensure instance exists
   if (!fs.existsSync(JINN_HOME)) {
-    console.error(`${RED}Error:${RESET} ${JINN_HOME} does not exist. Run "ryoko setup" first.`);
+    console.error(`${RED}エラー:${RESET} ${JINN_HOME} が存在しません。"ryoko setup" を実行してください。`);
     process.exit(1);
   }
 
   const packageVersion = getPackageVersion();
   const instanceVersion = getInstanceVersion();
 
-  console.log(`\n${DIM}Instance version:${RESET} ${instanceVersion}`);
-  console.log(`${DIM}Package version:${RESET}  ${packageVersion}\n`);
+  console.log(`\n${DIM}インスタンスバージョン:${RESET} ${instanceVersion}`);
+  console.log(`${DIM}パッケージバージョン:${RESET}  ${packageVersion}\n`);
 
   // Already up to date
   if (compareSemver(instanceVersion, packageVersion) >= 0) {
-    console.log(`${GREEN}Up to date.${RESET} No migrations needed.\n`);
+    console.log(`${GREEN}最新版です。${RESET} マイグレーションは不要です。\n`);
     return;
   }
 
@@ -112,33 +112,33 @@ export async function runMigrate(opts: { check?: boolean; auto?: boolean }): Pro
   const pending = getPendingMigrations(instanceVersion, packageVersion);
 
   if (pending.length === 0) {
-    console.log(`${YELLOW}No migration scripts found${RESET} for ${instanceVersion} → ${packageVersion}.`);
+    console.log(`${YELLOW}マイグレーションスクリプトが見つかりません${RESET}（${instanceVersion} → ${packageVersion}）。`);
 
     if (!opts.check) {
-      console.log(`Updating version stamp to ${packageVersion}...`);
+      console.log(`バージョン情報を ${packageVersion} に更新中...`);
       stampVersion(packageVersion);
-      console.log(`${GREEN}Done.${RESET}\n`);
+      console.log(`${GREEN}完了しました。${RESET}\n`);
     }
     return;
   }
 
   // List pending migrations
-  console.log(`${YELLOW}Pending migrations:${RESET}`);
+  console.log(`${YELLOW}保留中のマイグレーション:${RESET}`);
   for (const v of pending) {
     const migrationMd = path.join(TEMPLATE_DIR, "migrations", v, "MIGRATION.md");
     const hasMd = fs.existsSync(migrationMd);
-    console.log(`  ${v} ${hasMd ? "" : `${RED}(missing MIGRATION.md)${RESET}`}`);
+    console.log(`  ${v} ${hasMd ? "" : `${RED}(MIGRATION.md が見つかりません)${RESET}`}`);
   }
   console.log("");
 
   // --check: just show what's pending, don't apply
   if (opts.check) {
-    console.log(`Run ${DIM}jinn migrate${RESET} to apply.\n`);
+    console.log(`${DIM}ryoko migrate${RESET} で適用してください。\n`);
     return;
   }
 
   // Stage migration files into ~/.jinn/migrations/
-  console.log("Staging migration files...");
+  console.log("マイグレーションファイルをステージング中...");
   fs.mkdirSync(MIGRATIONS_DIR, { recursive: true });
 
   for (const version of pending) {
@@ -154,18 +154,18 @@ export async function runMigrate(opts: { check?: boolean; auto?: boolean }): Pro
   if (fs.existsSync(migrateSkillSrc) && !fs.existsSync(migrateSkillDest)) {
     copyDirRecursive(migrateSkillSrc, migrateSkillDest);
     ensureSkillSymlinks("migrate");
-    console.log(`  ${GREEN}[staged]${RESET} migrate skill`);
+    console.log(`  ${GREEN}[staged]${RESET} migrate スキル`);
   }
 
   // --auto: apply safe changes deterministically without launching AI
   if (opts.auto) {
-    console.log("\nApplying safe changes automatically...");
+    console.log("\n安全な変更を自動適用中...");
     await applyAutoMigrations(pending, instanceVersion, packageVersion);
     return;
   }
 
   // Launch AI session to apply migrations
-  console.log(`\nLaunching AI to apply ${pending.length} migration(s)...\n`);
+  console.log(`\n${pending.length} 件のマイグレーションを AI で適用中...\n`);
 
   const config = loadConfig();
   const defaultEngine = config.engines.default ?? "claude";
@@ -185,17 +185,17 @@ export async function runMigrate(opts: { check?: boolean; auto?: boolean }): Pro
     ].join("\n");
 
     const args = buildMigrateArgs(defaultEngine, prompt);
-    console.log(`${DIM}Engine: ${defaultEngine} (${engineConfig.bin})${RESET}\n`);
+    console.log(`${DIM}エンジン: ${defaultEngine} (${engineConfig.bin})${RESET}\n`);
 
     execFileSync(engineConfig.bin, args, {
       stdio: "inherit",
       cwd: JINN_HOME,
     });
 
-    console.log(`\n${GREEN}Migration complete.${RESET}\n`);
+    console.log(`\n${GREEN}マイグレーションが完了しました。${RESET}\n`);
   } catch (err: any) {
-    console.error(`\n${RED}Migration failed.${RESET} You can retry with: jinn migrate`);
-    console.error(`The staged files are still in ${MIGRATIONS_DIR}\n`);
+    console.error(`\n${RED}マイグレーションに失敗しました。${RESET} ryoko migrate で再試行できます。`);
+    console.error(`ステージング済みファイルは ${MIGRATIONS_DIR} に残っています。\n`);
     process.exit(1);
   }
 }

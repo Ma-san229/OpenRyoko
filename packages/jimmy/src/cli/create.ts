@@ -17,19 +17,19 @@ const RESET = "\x1b[0m";
 export async function runCreate(name: string, port?: number): Promise<void> {
   // Validate name
   if (!/^[a-z][a-z0-9-]*$/.test(name)) {
-    console.error(`${RED}Error:${RESET} Instance name must be lowercase alphanumeric with hyphens (e.g. "atlas", "my-bot").`);
+    console.error(`${RED}エラー:${RESET} インスタンス名は小文字英数字とハイフンのみ使用可能です（例: "atlas", "my-bot"）。`);
     process.exit(1);
   }
 
   if (name === "jinn") {
-    console.error(`${RED}Error:${RESET} "jinn" is the default instance. Use "ryoko setup" instead.`);
+    console.error(`${RED}エラー:${RESET} "jinn" はデフォルトインスタンス名です。代わりに "ryoko setup" を使用してください。`);
     process.exit(1);
   }
 
   const instances = loadInstances();
 
   if (instances.some((i) => i.name === name)) {
-    console.error(`${RED}Error:${RESET} Instance "${name}" already exists.`);
+    console.error(`${RED}エラー:${RESET} インスタンス "${name}" は既に存在します。`);
     process.exit(1);
   }
 
@@ -38,7 +38,7 @@ export async function runCreate(name: string, port?: number): Promise<void> {
 
   // Check if home dir already exists
   if (fs.existsSync(home)) {
-    console.error(`${RED}Error:${RESET} Directory ${home} already exists. Remove it first or choose a different name.`);
+    console.error(`${RED}エラー:${RESET} ディレクトリ ${home} は既に存在します。削除するか別の名前を指定してください。`);
     process.exit(1);
   }
 
@@ -51,7 +51,7 @@ export async function runCreate(name: string, port?: number): Promise<void> {
       stdio: "inherit",
     });
   } catch {
-    console.error(`${RED}Error:${RESET} Failed to run setup for instance "${name}".`);
+    console.error(`${RED}エラー:${RESET} インスタンス "${name}" のセットアップに失敗しました。`);
     process.exit(1);
   }
 
@@ -78,9 +78,9 @@ export async function runCreate(name: string, port?: number): Promise<void> {
   instances.push(instance);
   saveInstances(instances);
 
-  console.log(`\n${GREEN}Instance "${name}" created successfully.${RESET}`);
-  console.log(`  Home: ${DIM}${home}${RESET}`);
-  console.log(`  Port: ${DIM}${assignedPort}${RESET}`);
-  console.log(`\nStart with: ${DIM}jinn -i ${name} start${RESET}`);
-  console.log(`Or:         ${DIM}jinn -i ${name} start --daemon${RESET}\n`);
+  console.log(`\n${GREEN}インスタンス "${name}" を作成しました。${RESET}`);
+  console.log(`  ホーム: ${DIM}${home}${RESET}`);
+  console.log(`  ポート: ${DIM}${assignedPort}${RESET}`);
+  console.log(`\n起動: ${DIM}ryoko -i ${name} start${RESET}`);
+  console.log(`または: ${DIM}ryoko -i ${name} start --daemon${RESET}\n`);
 }

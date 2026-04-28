@@ -233,7 +233,7 @@ function detectProjectContext(portalSlug: string): void {
   if (detected.size > 0) {
     console.log("");
     for (const [label, query] of detected) {
-      console.log(`  💡 Detected ${label} projects. Run ${DIM}${portalSlug} skills find ${query}${RESET} to discover relevant skills.`);
+      console.log(`  💡 ${label} プロジェクトを検出。${DIM}${portalSlug} skills find ${query}${RESET} で関連スキルを探せます。`);
     }
   }
 }
@@ -277,12 +277,12 @@ Agents are configured via employees in the org/ directory.
 }
 
 export async function runSetup(opts?: { force?: boolean }): Promise<void> {
-  console.log("\nJinn Setup\n");
+  console.log("\nRyoko セットアップ\n");
 
   if (opts?.force && fs.existsSync(JINN_HOME)) {
-    console.log(`  ${YELLOW}[force]${RESET} Removing ${JINN_HOME}...`);
+    console.log(`  ${YELLOW}[force]${RESET} ${JINN_HOME} を削除中...`);
     fs.rmSync(JINN_HOME, { recursive: true, force: true });
-    console.log(`  ${GREEN}[ok]${RESET} Removed ${JINN_HOME}\n`);
+    console.log(`  ${GREEN}[ok]${RESET} ${JINN_HOME} を削除しました\n`);
   }
 
   // 1. Check Node.js version
@@ -290,25 +290,25 @@ export async function runSetup(opts?: { force?: boolean }): Promise<void> {
   if (nodeVersion >= 22) {
     ok(`Node.js v${process.versions.node}`);
   } else {
-    warn(`Node.js v${process.versions.node} -- v22+ recommended`);
+    warn(`Node.js v${process.versions.node} -- v22 以上を推奨`);
   }
 
   // 2. Check for claude binary
   const claudePath = whichBin("claude");
   if (claudePath) {
-    ok(`claude found at ${claudePath}`);
+    ok(`claude を検出: ${claudePath}`);
   } else {
-    fail("claude not found");
-    info("Install with: npm install -g @anthropic-ai/claude-code");
+    fail("claude が見つかりません");
+    info("インストール: npm install -g @anthropic-ai/claude-code");
   }
 
   // 3. Check for codex binary
   const codexPath = whichBin("codex");
   if (codexPath) {
-    ok(`codex found at ${codexPath}`);
+    ok(`codex を検出: ${codexPath}`);
   } else {
-    fail("codex not found");
-    info("Install with: npm install -g @openai/codex");
+    fail("codex が見つかりません");
+    info("インストール: npm install -g @openai/codex");
   }
 
   // 4. Check auth / versions
@@ -316,12 +316,12 @@ export async function runSetup(opts?: { force?: boolean }): Promise<void> {
   if (claudePath) {
     const ver = runVersion("claude");
     if (ver) ok(`claude --version: ${ver}`);
-    else warn("claude --version failed");
+    else warn("claude --version の実行に失敗");
   }
   if (codexPath) {
     const ver = runVersion("codex");
     if (ver) ok(`codex --version: ${ver}`);
-    else warn("codex --version failed");
+    else warn("codex --version の実行に失敗");
   }
 
   // 5. Interactive setup (only when stdin is a TTY and config doesn't exist yet)
@@ -351,7 +351,7 @@ export async function runSetup(opts?: { force?: boolean }): Promise<void> {
       chosenEngine = engineAnswer === "codex" ? "codex" : "claude";
     } else if (engines.length === 1) {
       chosenEngine = engines[0] as "claude" | "codex";
-      ok(`Using ${chosenEngine} as default engine (only engine installed)`);
+      ok(`${chosenEngine} をデフォルトエンジンに設定（唯一のインストール済みエンジン）`);
     }
   }
 
@@ -424,9 +424,9 @@ export async function runSetup(opts?: { force?: boolean }): Promise<void> {
   // 6. Initialize SQLite database
   try {
     initDb();
-    ok("Sessions database initialized");
+    ok("セッションDBを初期化しました");
   } catch (err) {
-    warn(`Failed to initialize sessions database: ${err}`);
+    warn(`セッションDBの初期化に失敗: ${err}`);
   }
 
   // 7. Create cron/jobs.json
@@ -514,13 +514,13 @@ export async function runSetup(opts?: { force?: boolean }): Promise<void> {
   // 12. Print summary
   console.log("");
   if (created.length === 0) {
-    ok("Everything already set up -- nothing to do");
+    ok("すでにセットアップ済みです");
   } else {
-    ok(`Created ${created.length} item(s):`);
+    ok(`${created.length} 件を作成しました:`);
     for (const item of created) {
       info(item);
     }
   }
 
-  console.log(`\n${GREEN}Setup complete.${RESET} Run ${DIM}jinn start${RESET} to launch the gateway.\n`);
+  console.log(`\n${GREEN}セットアップ完了。${RESET} ${DIM}ryoko start${RESET} でゲートウェイを起動できます。\n`);
 }

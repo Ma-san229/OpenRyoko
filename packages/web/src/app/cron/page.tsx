@@ -102,9 +102,9 @@ function RecentRuns({ jobId }: { jobId: string }) {
     return (
       <div className="mt-[var(--space-3)]">
         <div className="text-[length:var(--text-caption1)] text-[var(--text-tertiary)] font-semibold mb-[var(--space-2)]">
-          Recent Runs
+          最近の実行履歴
         </div>
-        <div className="text-[length:var(--text-caption2)] text-[var(--text-tertiary)]">No run history</div>
+        <div className="text-[length:var(--text-caption2)] text-[var(--text-tertiary)]">実行履歴はありません</div>
       </div>
     )
   }
@@ -302,18 +302,18 @@ export default function CronPage() {
           ) : (
             <Tabs defaultValue="overview">
               <TabsList variant="line">
-                <TabsTrigger value="overview">Overview</TabsTrigger>
-                <TabsTrigger value="schedule">Schedule</TabsTrigger>
-                <TabsTrigger value="pipelines">Pipelines</TabsTrigger>
+                <TabsTrigger value="overview">概要</TabsTrigger>
+                <TabsTrigger value="schedule">スケジュール</TabsTrigger>
+                <TabsTrigger value="pipelines">パイプライン</TabsTrigger>
               </TabsList>
 
               {/* ─── OVERVIEW TAB ────────────────────────────── */}
               <TabsContent value="overview">
                 {/* Summary cards */}
                 <div className="grid grid-cols-3 gap-[var(--space-3)] mb-[var(--space-4)] mt-[var(--space-4)]">
-                  <SummaryCard label="Total Jobs" value={jobs.length} />
-                  <SummaryCard label="Enabled" value={enabledCount} color="var(--system-green)" />
-                  <SummaryCard label="Disabled" value={disabledCount} color="var(--text-tertiary)" />
+                  <SummaryCard label="ジョブ総数" value={jobs.length} />
+                  <SummaryCard label="有効" value={enabledCount} color="var(--system-green)" />
+                  <SummaryCard label="無効" value={disabledCount} color="var(--text-tertiary)" />
                 </div>
 
                 {/* Filter pills */}

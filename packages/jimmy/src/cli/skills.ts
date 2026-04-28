@@ -151,7 +151,7 @@ export function skillsFind(query?: string): void {
 }
 
 export function skillsAdd(pkg: string): void {
-  console.log(`\nInstalling skill: ${pkg}\n`);
+  console.log(`\nスキルをインストール中: ${pkg}\n`);
 
   // Snapshot before
   const before = snapshotDirs();
@@ -163,7 +163,7 @@ export function skillsAdd(pkg: string): void {
   });
 
   if (result.status !== 0) {
-    console.error(`\n${RED}Failed to install skill.${RESET}`);
+    console.error(`\n${RED}スキルのインストールに失敗しました。${RESET}`);
     process.exitCode = 1;
     return;
   }
@@ -179,9 +179,9 @@ export function skillsAdd(pkg: string): void {
     if (existing) {
       copySkillToInstance(existing.name, existing.dir);
       upsertManifest(existing.name, pkg);
-      console.log(`\n${GREEN}Skill "${existing.name}" added to ${SKILLS_DIR}${RESET}`);
+      console.log(`\n${GREEN}スキル "${existing.name}" を ${SKILLS_DIR} に追加しました${RESET}`);
     } else {
-      console.log(`\n${YELLOW}Skill installed globally but could not locate the directory.${RESET}`);
+      console.log(`\n${YELLOW}グローバルにはインストール済みですが、ディレクトリの特定に失敗しました。${RESET}`);
     }
     return;
   }
@@ -190,25 +190,25 @@ export function skillsAdd(pkg: string): void {
   const installed = newDirs[0];
   copySkillToInstance(installed.name, path.join(installed.dir, installed.name));
   upsertManifest(installed.name, pkg);
-  console.log(`\n${GREEN}Skill "${installed.name}" added to ${SKILLS_DIR}${RESET}`);
+  console.log(`\n${GREEN}スキル "${installed.name}" を ${SKILLS_DIR} に追加しました${RESET}`);
 }
 
 export function skillsRemove(name: string): void {
   const skillDir = path.join(SKILLS_DIR, name);
   if (!fs.existsSync(skillDir)) {
-    console.error(`${RED}Skill "${name}" not found in ${SKILLS_DIR}${RESET}`);
+    console.error(`${RED}スキル "${name}" は ${SKILLS_DIR} に見つかりません${RESET}`);
     process.exitCode = 1;
     return;
   }
 
   fs.rmSync(skillDir, { recursive: true, force: true });
   removeFromManifest(name);
-  console.log(`${GREEN}Skill "${name}" removed.${RESET}`);
+  console.log(`${GREEN}スキル "${name}" を削除しました。${RESET}`);
 }
 
 export function skillsList(): void {
   if (!fs.existsSync(SKILLS_DIR)) {
-    console.log("No skills installed.");
+    console.log("インストール済みスキルがありません。");
     return;
   }
 
@@ -219,11 +219,11 @@ export function skillsList(): void {
   const skillDirs = entries.filter((e) => e.isDirectory());
 
   if (skillDirs.length === 0) {
-    console.log("No skills installed.");
+    console.log("インストール済みスキルがありません。");
     return;
   }
 
-  console.log(`\n  Skills in ${DIM}${SKILLS_DIR}${RESET}\n`);
+  console.log(`\n  ${DIM}${SKILLS_DIR}${RESET} のスキル\n`);
   for (const dir of skillDirs) {
     const meta = manifestMap.get(dir.name);
     const source = meta ? `${DIM}(${meta.source})${RESET}` : `${DIM}(local)${RESET}`;
@@ -245,13 +245,13 @@ export function skillsList(): void {
 export function skillsUpdate(): void {
   const manifest = readManifest();
   if (manifest.length === 0) {
-    console.log("No skills in manifest to update.");
+    console.log("更新対象のスキルがマニフェストにありません。");
     return;
   }
 
-  console.log(`\nUpdating ${manifest.length} skill(s)...\n`);
+  console.log(`\n${manifest.length} 件のスキルを更新中...\n`);
   for (const entry of manifest) {
-    console.log(`  Updating ${entry.name} from ${entry.source}...`);
+    console.log(`  ${entry.name} を ${entry.source} から更新中...`);
     const before = snapshotDirs();
     const result = spawnSync("npx", ["skills", "add", entry.source, "-g", "-y"], {
       stdio: "pipe",
@@ -259,7 +259,7 @@ export function skillsUpdate(): void {
     });
 
     if (result.status !== 0) {
-      console.log(`  ${RED}Failed to update ${entry.name}${RESET}`);
+      console.log(`  ${RED}${entry.name} の更新に失敗${RESET}`);
       continue;
     }
 
@@ -274,7 +274,7 @@ export function skillsUpdate(): void {
       }
     }
     upsertManifest(entry.name, entry.source);
-    console.log(`  ${GREEN}Updated ${entry.name}${RESET}`);
+    console.log(`  ${GREEN}${entry.name} を更新しました${RESET}`);
   }
   console.log("");
 }
@@ -282,11 +282,11 @@ export function skillsUpdate(): void {
 export function skillsRestore(): void {
   const manifest = readManifest();
   if (manifest.length === 0) {
-    console.log("No skills in manifest to restore.");
+    console.log("復元対象のスキルがマニフェストにありません。");
     return;
   }
 
-  console.log(`\nRestoring ${manifest.length} skill(s)...\n`);
+  console.log(`\n${manifest.length} 件のスキルを復元中...\n`);
   for (const entry of manifest) {
     const destDir = path.join(SKILLS_DIR, entry.name);
     if (fs.existsSync(destDir)) {

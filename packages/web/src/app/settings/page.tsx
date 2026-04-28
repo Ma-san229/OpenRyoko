@@ -414,7 +414,7 @@ function SttSettingsSection() {
       {status.downloading && (
         <div className="mb-[var(--space-4)]">
           <div className="flex justify-between mb-[var(--space-2)] text-[length:var(--text-caption1)] text-[var(--text-tertiary)]">
-            <span>Downloading model…</span>
+            <span>モデルをダウンロード中…</span>
             <span>{status.progress}%</span>
           </div>
           <div className="h-[6px] rounded-[3px] bg-[var(--fill-tertiary)] overflow-hidden">
@@ -433,10 +433,10 @@ function SttSettingsSection() {
         <>
           <div className="border-t border-[var(--separator)] mt-[var(--space-2)] pt-[var(--space-3)]">
             <div className="text-[length:var(--text-caption1)] font-[var(--weight-semibold)] text-[var(--text-tertiary)] mb-[var(--space-2)]">
-              Transcription Languages
+              文字起こし言語
             </div>
             <div className="text-[length:var(--text-caption2)] text-[var(--text-tertiary)] mb-[var(--space-3)]">
-              First language is the default. Add multiple to show a language picker in chat.
+              最初の言語がデフォルトになります。複数追加するとチャットで言語ピッカーが表示されます。
             </div>
 
             {/* Language chips */}
@@ -474,7 +474,7 @@ function SttSettingsSection() {
                   color: addLang ? "var(--text-primary)" : "var(--text-tertiary)",
                 }}
               >
-                <option value="">Add a language…</option>
+                <option value="">言語を追加…</option>
                 {availableLangs.map(([code, name]) => (
                   <option key={code} value={code}>
                     {code.toUpperCase()} — {name}
@@ -562,7 +562,7 @@ function SlackSetupGuide() {
               aria-label="Copy manifest JSON"
               className="absolute top-2 right-2 py-0.5 px-2 text-[11px] rounded-[var(--radius-sm)] bg-[var(--fill-secondary)] text-[var(--text-secondary)] border border-[var(--separator)] cursor-pointer"
             >
-              {copied ? "Copied!" : "Copy"}
+              {copied ? "コピー済み" : "コピー"}
             </button>
             <pre className="bg-[var(--fill-tertiary)] border border-[var(--separator)] rounded-[var(--radius-md)] py-[var(--space-3)] px-[var(--space-4)] overflow-x-auto text-[12px] leading-normal font-['SF_Mono',Menlo,monospace] text-[var(--text-primary)] max-h-[280px]">
               <code>{SLACK_APP_MANIFEST}</code>
@@ -877,7 +877,7 @@ export default function SettingsPage() {
                   className="text-[length:var(--text-footnote)] text-[var(--system-blue)] bg-none border-none cursor-pointer p-0 inline-flex items-center gap-[4px]"
                 >
                   <RotateCcw size={12} />
-                  Reset
+                  リセット
                 </button>
               )}
             </div>
@@ -887,7 +887,7 @@ export default function SettingsPage() {
           <Section title="COO絵文字">
             <div>
               <div className="text-[length:var(--text-caption1)] text-[var(--text-tertiary)] mb-[var(--space-3)]">
-                Choose an emoji for the COO shown in the sidebar.
+                サイドバーに表示される COO の絵文字を選択してください。
               </div>
               <div className="relative flex items-center gap-[var(--space-4)]">
                 <button
@@ -901,7 +901,7 @@ export default function SettingsPage() {
                     {settings.operatorName || "Jimbo"}
                   </div>
                   <div className="text-[length:var(--text-caption1)] text-[var(--text-tertiary)]">
-                    Click emoji to change
+                    絵文字をクリックして変更
                   </div>
                 </div>
                 {showCooEmojiPicker && (
@@ -1127,7 +1127,7 @@ export default function SettingsPage() {
                       updateConfig(["engines", "claude", "model"], v)
                     }
                     options={[
-                      { value: "opus", label: "Opus (claude-opus-4-6)" },
+                      { value: "opus", label: "Opus (claude-opus-4-7)" },
                       { value: "sonnet", label: "Sonnet (claude-sonnet-4-6)" },
                       { value: "haiku", label: "Haiku (claude-haiku-4-5)" },
                     ]}
@@ -1202,7 +1202,7 @@ export default function SettingsPage() {
 
               {/* -- Section 5: Sessions -- */}
               <Section title="セッション">
-                <FieldRow label="Interrupt on New Message">
+                <FieldRow label="新規メッセージで中断">
                   <ToggleSwitch
                     checked={config.sessions?.interruptOnNewMessage ?? true}
                     onChange={(v) =>
@@ -1213,32 +1213,31 @@ export default function SettingsPage() {
                 <div
                   className="text-[length:var(--text-caption1)] text-[var(--label-secondary)] mt-[4px]"
                 >
-                  When enabled, sending a new message to a running session will stop the
-                  current agent and start processing your new message immediately. When
-                  disabled, messages are queued.
+                  有効にすると、実行中のセッションに新しいメッセージを送ると現在のエージェントを停止し、
+                  すぐに新しいメッセージの処理を開始します。無効時はメッセージはキューに入ります。
                 </div>
 
                 <div
                   className="border-t border-[var(--separator)] mt-[var(--space-3)] pt-[var(--space-3)]"
                 />
 
-                <FieldRow label="When Claude Hits Usage Limit">
+                <FieldRow label="Claude が利用上限に達した時">
                   <SettingsSelect
                     value={config.sessions?.rateLimitStrategy ?? "fallback"}
                     onChange={(v) =>
                       updateConfig(["sessions", "rateLimitStrategy"], v)
                     }
                     options={[
-                      { value: "wait", label: "Wait & Auto-Resume" },
-                      { value: "fallback", label: "Switch to GPT (Codex)" },
+                      { value: "wait", label: "待機して自動再開" },
+                      { value: "fallback", label: "GPT (Codex) に切り替え" },
                     ]}
                   />
                 </FieldRow>
                 <div
                   className="text-[length:var(--text-caption1)] text-[var(--label-secondary)] mt-[4px]"
                 >
-                  "Wait" pauses the session and continues automatically when Claude resets.
-                  "Switch" answers immediately using GPT, then returns to Claude once the reset window passes.
+                  「待機」は Claude のリセットを待ってからセッションを自動再開します。
+                  「切り替え」は即座に GPT で応答し、リセット後に Claude へ戻します。
                 </div>
               </Section>
 
@@ -1431,7 +1430,7 @@ export default function SettingsPage() {
                     onChange={(v) =>
                       updateConfig(["connectors", "discord", "guildId"], v.trim() || undefined)
                     }
-                    placeholder="Server/Guild ID (optional)"
+                    placeholder="サーバー/Guild ID（任意）"
                   />
                 </FieldRow>
                 <FieldRow label="Channel ID">
@@ -1440,7 +1439,7 @@ export default function SettingsPage() {
                     onChange={(v) =>
                       updateConfig(["connectors", "discord", "channelId"], v.trim() || undefined)
                     }
-                    placeholder="Restrict to this channel (right-click → Copy Channel ID)"
+                    placeholder="このチャンネルに限定（右クリック → Copy Channel ID）"
                   />
                 </FieldRow>
 
@@ -1463,7 +1462,7 @@ export default function SettingsPage() {
                     placeholder="123456:ABC-DEF..."
                   />
                 </FieldRow>
-                <FieldRow label="Allow From (User IDs)">
+                <FieldRow label="許可ユーザー (User ID)">
                   <SettingsInput
                     value={Array.isArray(config.connectors?.telegram?.allowFrom)
                       ? config.connectors?.telegram?.allowFrom?.join(", ")
@@ -1474,7 +1473,7 @@ export default function SettingsPage() {
                         v.trim() ? v.split(",").map((entry) => Number(entry.trim())).filter((n) => !isNaN(n)) : undefined,
                       )
                     }
-                    placeholder="Telegram user IDs, comma-separated (optional)"
+                    placeholder="Telegram の User ID をカンマ区切り（任意）"
                   />
                 </FieldRow>
                 <FieldRow label="起動時に古いメッセージを無視">
@@ -1495,18 +1494,18 @@ export default function SettingsPage() {
                 <div
                   className="text-[length:var(--text-caption2)] text-[var(--text-tertiary)] mb-[var(--space-3)]"
                 >
-                  On first start, scan the QR code below with your WhatsApp app to connect. Credentials are cached for subsequent runs.
+                  初回起動時、下のQRコードを WhatsApp アプリでスキャンして接続してください。認証情報は次回以降キャッシュされます。
                 </div>
-                <FieldRow label="Auth Directory">
+                <FieldRow label="認証ディレクトリ">
                   <SettingsInput
                     value={config.connectors?.whatsapp?.authDir ?? ""}
                     onChange={(v) =>
                       updateConfig(["connectors", "whatsapp", "authDir"], v.trim() || undefined)
                     }
-                    placeholder="Default: ~/.jinn/.whatsapp-auth"
+                    placeholder="デフォルト: ~/.ryoko/.whatsapp-auth"
                   />
                 </FieldRow>
-                <FieldRow label="Allow From">
+                <FieldRow label="許可送信元">
                   <SettingsInput
                     value={Array.isArray(config.connectors?.whatsapp?.allowFrom)
                       ? config.connectors?.whatsapp?.allowFrom?.join(", ")
@@ -1517,7 +1516,7 @@ export default function SettingsPage() {
                         v.trim() ? v.split(",").map((entry) => entry.trim()).filter(Boolean) : undefined,
                       )
                     }
-                    placeholder="447700900000@s.whatsapp.net, ... (optional)"
+                    placeholder="447700900000@s.whatsapp.net, ...（任意）"
                   />
                 </FieldRow>
 
@@ -1528,17 +1527,17 @@ export default function SettingsPage() {
                     <div
                       className="text-[length:var(--text-caption1)] font-semibold text-[var(--text-secondary)]"
                     >
-                      Scan with WhatsApp to connect
+                      WhatsApp でスキャンして接続
                     </div>
                     <img
                       src={waQr}
-                      alt="WhatsApp QR Code"
+                      alt="WhatsApp QRコード"
                       className="w-[200px] h-[200px] rounded-[var(--radius-md)] border border-[var(--separator)] bg-white p-[8px]"
                     />
                     <div
                       className="text-[length:var(--text-caption2)] text-[var(--text-tertiary)]"
                     >
-                      Open WhatsApp → Linked Devices → Link a Device
+                      WhatsApp → リンク済み端末 → 端末をリンク
                     </div>
                   </div>
                 )}
@@ -1546,7 +1545,7 @@ export default function SettingsPage() {
                   <div
                     className="mt-[var(--space-2)] text-[length:var(--text-caption1)] text-[var(--system-green)] font-semibold"
                   >
-                    ✓ Connected
+                    ✓ 接続済み
                   </div>
                 )}
 
@@ -1554,7 +1553,7 @@ export default function SettingsPage() {
                 <div className="border-t border-[var(--separator)] mt-[var(--space-3)] pt-[var(--space-3)]" />
                 <div className="flex items-center justify-between mb-[var(--space-2)]">
                   <div className="text-[length:var(--text-caption1)] font-[var(--weight-semibold)] text-[var(--text-tertiary)]">
-                    Connector Instances
+                    コネクタインスタンス
                   </div>
                   <div className="flex items-center gap-[var(--space-2)]">
                     <button
@@ -1852,7 +1851,7 @@ export default function SettingsPage() {
                   className="px-[var(--space-4)] py-[var(--space-2)] rounded-[var(--radius-md)] bg-[var(--fill-tertiary)] text-[var(--text-secondary)] border-none cursor-pointer text-[length:var(--text-footnote)] font-[var(--weight-medium)] inline-flex items-center gap-[6px]"
                 >
                   <RotateCcw size={14} />
-                  Reload
+                  再読み込み
                 </button>
                 <button
                   onClick={handleSave}
@@ -1864,14 +1863,14 @@ export default function SettingsPage() {
                   }}
                 >
                   <Save size={14} />
-                  {saving ? "Saving..." : "Save Config"}
+                  {saving ? "保存中…" : "設定を保存"}
                 </button>
               </div>
             </>
           )}
 
           {/* -- Section 7: Reset -- */}
-          <Section title="Reset">
+          <Section title="リセット">
             <div
               className="flex items-center justify-center gap-[var(--space-3)] flex-wrap"
             >
@@ -1883,12 +1882,12 @@ export default function SettingsPage() {
                 className="px-[var(--space-5)] py-[var(--space-2)] rounded-[var(--radius-md)] bg-[var(--accent)] text-[var(--accent-contrast)] border-none cursor-pointer text-[length:var(--text-footnote)] font-[var(--weight-semibold)] transition-all duration-150 ease-[var(--ease-spring)] inline-flex items-center gap-[var(--space-2)]"
               >
                 <RotateCcw size={14} />
-                Re-run Onboarding Wizard
+                オンボーディングを再実行
               </button>
               <button
                 onClick={() => {
                   if (
-                    window.confirm("Reset all settings to defaults?")
+                    window.confirm("すべての設定を初期値に戻しますか？")
                   ) {
                     localStorage.removeItem("jinn-settings")
                     localStorage.removeItem("jinn-theme")
@@ -1899,7 +1898,7 @@ export default function SettingsPage() {
                 className="px-[var(--space-5)] py-[var(--space-2)] rounded-[var(--radius-md)] bg-[var(--system-red)] text-white border-none cursor-pointer text-[length:var(--text-footnote)] font-[var(--weight-semibold)] transition-all duration-150 ease-[var(--ease-spring)] inline-flex items-center gap-[var(--space-2)]"
               >
                 <Trash2 size={14} />
-                Reset All Settings
+                すべての設定をリセット
               </button>
             </div>
           </Section>

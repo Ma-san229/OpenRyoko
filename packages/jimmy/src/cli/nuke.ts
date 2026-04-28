@@ -22,13 +22,13 @@ export async function runNuke(name?: string): Promise<void> {
   const instances = loadInstances().filter((i) => i.name !== "jinn");
 
   if (instances.length === 0) {
-    console.log("No removable instances found. The default \"jinn\" instance cannot be nuked.");
+    console.log("削除可能なインスタンスがありません。デフォルトの \"jinn\" インスタンスは削除できません。");
     return;
   }
 
   // If no name provided, show list and let user pick
   if (!name) {
-    console.log("\nAvailable instances:\n");
+    console.log("\n利用可能なインスタンス:\n");
     for (let i = 0; i < instances.length; i++) {
       const inst = instances[i];
       const homeDisplay = inst.home.replace(process.env.HOME || process.env.USERPROFILE || "", "~");
@@ -36,7 +36,7 @@ export async function runNuke(name?: string): Promise<void> {
     }
     console.log("");
 
-    const choice = await ask("Select instance to nuke (number or name): ");
+    const choice = await ask("削除するインスタンスを選択（番号または名前）: ");
 
     // Try as number first
     const num = parseInt(choice, 10);
@@ -48,7 +48,7 @@ export async function runNuke(name?: string): Promise<void> {
   }
 
   if (name === "jinn") {
-    console.error(`${RED}Error:${RESET} Cannot nuke the default "jinn" instance.`);
+    console.error(`${RED}エラー:${RESET} デフォルトの "jinn" インスタンスは削除できません。`);
     process.exit(1);
   }
 
@@ -56,7 +56,7 @@ export async function runNuke(name?: string): Promise<void> {
   const index = allInstances.findIndex((i) => i.name === name);
 
   if (index === -1) {
-    console.error(`${RED}Error:${RESET} Instance "${name}" not found.`);
+    console.error(`${RED}エラー:${RESET} インスタンス "${name}" は存在しません。`);
     process.exit(1);
   }
 
@@ -69,27 +69,27 @@ export async function runNuke(name?: string): Promise<void> {
     try {
       const pid = parseInt(fs.readFileSync(pidFile, "utf-8").trim(), 10);
       process.kill(pid, 0);
-      console.log(`\n${YELLOW}Instance "${name}" is running. Stopping it first...${RESET}`);
+      console.log(`\n${YELLOW}インスタンス "${name}" は実行中です。先に停止します...${RESET}`);
       process.kill(pid, "SIGTERM");
       // Wait briefly for graceful shutdown
       await new Promise((resolve) => setTimeout(resolve, 1000));
-      console.log(`  Stopped.`);
+      console.log(`  停止しました。`);
     } catch {
       // Process not alive, continue
     }
   }
 
   // Show warning
-  console.log(`\n${RED}${BOLD}⚠  WARNING: THIS ACTION CANNOT BE UNDONE${RESET}\n`);
-  console.log(`  This will permanently delete:`);
-  console.log(`    • Instance "${name}" from the registry`);
-  console.log(`    • All data in ${DIM}${homeDisplay}${RESET}`);
-  console.log(`      ${DIM}(config, sessions, skills, org, logs — everything)${RESET}\n`);
+  console.log(`\n${RED}${BOLD}⚠  警告: この操作は取り消せません${RESET}\n`);
+  console.log(`  以下を完全に削除します:`);
+  console.log(`    • レジストリ上の "${name}" インスタンス`);
+  console.log(`    • ${DIM}${homeDisplay}${RESET} 内のすべてのデータ`);
+  console.log(`      ${DIM}(config・sessions・skills・org・logs — 全て)${RESET}\n`);
 
-  const confirmation = await ask(`Type "${BOLD}${name}${RESET}" to confirm: `);
+  const confirmation = await ask(`確認のため "${BOLD}${name}${RESET}" と入力: `);
 
   if (confirmation !== name) {
-    console.log("\nAborted. Nothing was deleted.");
+    console.log("\n中止しました。何も削除されていません。");
     return;
   }
 
@@ -102,5 +102,5 @@ export async function runNuke(name?: string): Promise<void> {
     fs.rmSync(instance.home, { recursive: true, force: true });
   }
 
-  console.log(`\n${RED}Instance "${name}" has been nuked.${RESET} ${DIM}${homeDisplay}${RESET} deleted.`);
+  console.log(`\n${RED}インスタンス "${name}" を削除しました。${RESET} ${DIM}${homeDisplay}${RESET} を削除しました。`);
 }
