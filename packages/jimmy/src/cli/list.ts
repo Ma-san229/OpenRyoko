@@ -13,7 +13,7 @@ export async function runList(): Promise<void> {
   const instances = loadInstances();
 
   if (instances.length === 0) {
-    console.log("No instances found. Run \"jinn setup\" to create the default instance.");
+    console.log("No instances found. Run \"ryoko setup\" to create the default instance.");
     return;
   }
 

@@ -92,7 +92,7 @@ function buildMigrateArgs(engine: string, prompt: string): string[] {
 export async function runMigrate(opts: { check?: boolean; auto?: boolean }): Promise<void> {
   // Ensure instance exists
   if (!fs.existsSync(JINN_HOME)) {
-    console.error(`${RED}Error:${RESET} ${JINN_HOME} does not exist. Run "jinn setup" first.`);
+    console.error(`${RED}Error:${RESET} ${JINN_HOME} does not exist. Run "ryoko setup" first.`);
     process.exit(1);
   }
 

@@ -31,6 +31,76 @@ const ACCENT_PRESETS = [
 ]
 
 // ---------------------------------------------------------------------------
+// Slack App manifest (minimum config — paste-and-go)
+// ---------------------------------------------------------------------------
+
+const SLACK_APP_MANIFEST = JSON.stringify(
+  {
+    display_information: { name: "Ryoko" },
+    features: {
+      app_home: {
+        messages_tab_enabled: true,
+        messages_tab_read_only_enabled: false,
+      },
+      bot_user: { display_name: "Ryoko", always_online: true },
+    },
+    oauth_config: {
+      scopes: {
+        bot: [
+          "app_mentions:read",
+          "channels:history",
+          "channels:read",
+          "chat:write",
+          "chat:write.customize",
+          "files:read",
+          "files:write",
+          "groups:history",
+          "groups:read",
+          "im:history",
+          "im:read",
+          "im:write",
+          "mpim:history",
+          "mpim:read",
+          "mpim:write",
+          "reactions:read",
+          "reactions:write",
+          "users:read",
+          "users:read.email",
+        ],
+        user: [
+          "channels:history",
+          "channels:read",
+          "files:read",
+          "groups:history",
+          "groups:read",
+          "im:history",
+          "im:read",
+          "mpim:history",
+          "mpim:read",
+          "search:read",
+          "users:read",
+          "bookmarks:read",
+        ],
+      },
+    },
+    settings: {
+      event_subscriptions: {
+        bot_events: [
+          "app_mention",
+          "message.channels",
+          "message.groups",
+          "message.im",
+          "message.mpim",
+        ],
+      },
+      socket_mode_enabled: true,
+    },
+  },
+  null,
+  2,
+)
+
+// ---------------------------------------------------------------------------
 // Config type (gateway API)
 // ---------------------------------------------------------------------------
 
@@ -428,6 +498,79 @@ function SttSettingsSection() {
         </>
       )}
     </Section>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Slack onboarding guide (manifest copy panel)
+// ---------------------------------------------------------------------------
+
+function SlackSetupGuide() {
+  const [copied, setCopied] = useState(false)
+  const [open, setOpen] = useState(true)
+
+  function handleCopy() {
+    navigator.clipboard.writeText(SLACK_APP_MANIFEST).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }
+
+  return (
+    <div className="border border-[var(--separator)] rounded-[var(--radius-md)] bg-[var(--fill-quaternary)] p-[var(--space-3)] mb-[var(--space-3)]">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center justify-between w-full text-left cursor-pointer"
+      >
+        <span className="text-[length:var(--text-body)] font-[var(--weight-semibold)] text-[var(--text-primary)]">
+          Slack App セットアップガイド
+        </span>
+        <span className="text-[length:var(--text-caption1)] text-[var(--text-tertiary)]">
+          {open ? "閉じる" : "開く"}
+        </span>
+      </button>
+      {open && (
+        <div className="mt-[var(--space-3)]">
+          <ol className="list-decimal pl-[20px] text-[length:var(--text-caption1)] text-[var(--label-secondary)] leading-relaxed mb-[var(--space-3)] space-y-[2px]">
+            <li>
+              <a
+                href="https://api.slack.com/apps"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[var(--accent)] underline"
+              >
+                Slack API の Your Apps ページ
+              </a>
+              を開き、「Create New App」を選択。
+            </li>
+            <li>「From a manifest」を選び、対象ワークスペースを指定。</li>
+            <li>下のJSONをコピーして貼り付け、「Create」で作成。</li>
+            <li>
+              「Install to Workspace」を実行し、OAuth & Permissions の「Bot User OAuth
+              Token」（<code>xoxb-…</code>）を下の Bot Token に貼り付け。
+            </li>
+            <li>
+              「Basic Information」→「App-Level Tokens」で <code>connections:write</code>{" "}
+              スコープ付きトークンを発行し（<code>xapp-…</code>）、下の App Token に貼り付け。
+            </li>
+          </ol>
+          <div className="relative">
+            <button
+              type="button"
+              onClick={handleCopy}
+              aria-label="Copy manifest JSON"
+              className="absolute top-2 right-2 py-0.5 px-2 text-[11px] rounded-[var(--radius-sm)] bg-[var(--fill-secondary)] text-[var(--text-secondary)] border border-[var(--separator)] cursor-pointer"
+            >
+              {copied ? "Copied!" : "Copy"}
+            </button>
+            <pre className="bg-[var(--fill-tertiary)] border border-[var(--separator)] rounded-[var(--radius-md)] py-[var(--space-3)] px-[var(--space-4)] overflow-x-auto text-[12px] leading-normal font-['SF_Mono',Menlo,monospace] text-[var(--text-primary)] max-h-[280px]">
+              <code>{SLACK_APP_MANIFEST}</code>
+            </pre>
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -1025,11 +1168,12 @@ export default function SettingsPage() {
                 </FieldRow>
                 <FieldRow label="Model">
                   <SettingsSelect
-                    value={config.engines?.codex?.model ?? "gpt-5.4"}
+                    value={config.engines?.codex?.model ?? "gpt-5.5"}
                     onChange={(v) =>
                       updateConfig(["engines", "codex", "model"], v)
                     }
                     options={[
+                      { value: "gpt-5.5", label: "GPT-5.5" },
                       { value: "gpt-5.4", label: "GPT-5.4" },
                       { value: "gpt-5.3-codex", label: "GPT-5.3 Codex" },
                       { value: "gpt-5.2-codex", label: "GPT-5.2 Codex" },
@@ -1105,6 +1249,7 @@ export default function SettingsPage() {
                 >
                   Slack
                 </div>
+                <SlackSetupGuide />
                 <FieldRow label="App Token">
                   <SettingsInput
                     type="password"
@@ -1115,6 +1260,9 @@ export default function SettingsPage() {
                     placeholder="xapp-..."
                   />
                 </FieldRow>
+                <div className="text-[length:var(--text-caption2)] text-[var(--text-tertiary)] mt-[-4px] mb-[var(--space-2)] pl-[var(--space-1)]">
+                  Basic Information → App-Level Tokens で発行したトークン（<code>xapp-…</code>）。
+                </div>
                 <FieldRow label="Bot Token">
                   <SettingsInput
                     type="password"
@@ -1125,6 +1273,10 @@ export default function SettingsPage() {
                     placeholder="xoxb-..."
                   />
                 </FieldRow>
+                <div className="text-[length:var(--text-caption2)] text-[var(--text-tertiary)] mt-[-4px] mb-[var(--space-2)] pl-[var(--space-1)]">
+                  ワークスペースにインストール後の OAuth & Permissions →
+                  Bot User OAuth Token（<code>xoxb-…</code>）。
+                </div>
                 <FieldRow label="チャンネルでセッションを共有">
                   <ToggleSwitch
                     checked={config.connectors?.slack?.shareSessionInChannel ?? false}

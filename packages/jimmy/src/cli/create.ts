@@ -22,7 +22,7 @@ export async function runCreate(name: string, port?: number): Promise<void> {
   }
 
   if (name === "jinn") {
-    console.error(`${RED}Error:${RESET} "jinn" is the default instance. Use "jinn setup" instead.`);
+    console.error(`${RED}Error:${RESET} "jinn" is the default instance. Use "ryoko setup" instead.`);
     process.exit(1);
   }
 

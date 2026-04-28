@@ -938,7 +938,7 @@ export async function startGateway(
         const msg = `Port ${port} is already in use.`;
         logger.error(msg);
         console.error(`\nError: ${msg}`);
-        console.error(`\nTry: jinn start -p ${port + 1}`);
+        console.error(`\nTry: ryoko start -p ${port + 1}`);
         console.error(`Or update the port in config.yaml\n`);
         process.exit(1);
       }

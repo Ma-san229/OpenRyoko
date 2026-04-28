@@ -252,7 +252,7 @@ engines:
     effortLevel: medium
   codex:
     bin: codex
-    model: gpt-5.4
+    model: gpt-5.5
 connectors: {}
 portal: {}
 logging:
@@ -339,7 +339,7 @@ export async function runSetup(opts?: { force?: boolean }): Promise<void> {
 
   if (isInteractive) {
     console.log("");
-    chosenName = await prompt("What should your AI assistant be called?", defaultName);
+    chosenName = await prompt("AIアシスタントの名前は？", defaultName);
 
     // Determine available engines
     const engines: string[] = [];
@@ -347,7 +347,7 @@ export async function runSetup(opts?: { force?: boolean }): Promise<void> {
     if (codexPath) engines.push("codex");
 
     if (engines.length === 2) {
-      const engineAnswer = await prompt("Preferred engine? (claude/codex)", "claude");
+      const engineAnswer = await prompt("使用するエンジンは？ (claude/codex)", "claude");
       chosenEngine = engineAnswer === "codex" ? "codex" : "claude";
     } else if (engines.length === 1) {
       chosenEngine = engines[0] as "claude" | "codex";
