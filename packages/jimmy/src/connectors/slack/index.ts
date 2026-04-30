@@ -12,7 +12,7 @@ import { buildReplyContext, deriveSessionKey, isOldSlackMessage } from "./thread
 import { formatResponse, downloadAttachment } from "./format.js";
 import { normalizeSpeakerInfo, type SpeakerInfo } from "./speaker.js";
 import { runTriage } from "./triage.js";
-import { ActiveThreadTracker } from "./active-threads.js";
+import { ConversationTracker } from "./conversation-tracker.js";
 import type { SlackTriageConfig } from "../../shared/types.js";
 import { TMP_DIR } from "../../shared/paths.js";
 import { logger } from "../../shared/logger.js";
@@ -40,10 +40,9 @@ export class SlackConnector implements Connector {
   private readonly triageConfig: SlackTriageConfig | undefined;
   private readonly portalName: string | undefined;
   private readonly operatorName: string | undefined;
-  private readonly activeThreads: ActiveThreadTracker;
+  private readonly conversations: ConversationTracker;
   private static CHANNEL_CACHE_TTL_MS = 3600_000; // 1 hour
   private static USER_CACHE_TTL_MS = 3600_000; // 1 hour
-  private static ACTIVE_THREAD_TTL_MS_DEFAULT = 600_000; // 10 minutes
 
   private readonly capabilities: ConnectorCapabilities = {
     threading: true,
@@ -120,9 +119,7 @@ export class SlackConnector implements Connector {
     this.triageConfig = config.triage;
     this.portalName = context.portalName;
     this.operatorName = context.operatorName;
-    this.activeThreads = new ActiveThreadTracker(
-      config.triage?.activeThreadTtlMs ?? SlackConnector.ACTIVE_THREAD_TTL_MS_DEFAULT,
-    );
+    this.conversations = new ConversationTracker();
   }
 
   private async resolveSpeakerInfo(userId: string | undefined): Promise<SpeakerInfo | null> {
@@ -393,17 +390,31 @@ export class SlackConnector implements Connector {
 
       // Air-reading triage gate.
       // Fast paths that bypass the LLM triage entirely:
-      //   - DMs: always reply (1:1 context is implicitly addressed to the bot)
+      //   - DMs: 1:1 context is implicitly addressed to the bot
       //   - Explicit @-mention: always reply
-      //   - Active thread: bot recently participated → follow-up is implicitly addressed.
-      //     This prevents triage from silently dropping mid-skill / mid-conversation messages.
+      //   - DM-equivalent conversation: bot has engaged AND only this user has
+      //     spoken in the conversation (thread or channel-user scope). Permanent
+      //     until a third human joins.
       const triageEnabled = this.triageConfig?.enabled === true;
-      const threadKey = ((event as any).thread_ts || (event as any).ts) as string | undefined;
-      const isActiveThread = this.activeThreads.isActive((event as any).channel, threadKey);
-      const skipTriage = !triageEnabled || channelType === "im" || wasMentioned || isActiveThread;
+      const conversationKey = {
+        channel: (event as any).channel as string,
+        threadTs: (event as any).thread_ts as string | undefined,
+        ts: (event as any).ts as string | undefined,
+        userId: slackUserId,
+      };
+      this.conversations.recordHumanMessage(conversationKey);
+      const isDmEquivalent =
+        triageEnabled && channelType !== "im" && !wasMentioned
+          ? this.conversations.isDmEquivalent(conversationKey)
+          : false;
+      const skipTriage =
+        !triageEnabled ||
+        channelType === "im" ||
+        wasMentioned ||
+        isDmEquivalent;
 
-      if (triageEnabled && isActiveThread && !wasMentioned && channelType !== "im") {
-        logger.info(`[slack] skipping triage — thread ${(event as any).channel}:${threadKey} is active`);
+      if (triageEnabled && isDmEquivalent) {
+        logger.info(`[slack] skipping triage — DM-equivalent conversation in ${(event as any).channel}`);
       }
 
       if (!skipTriage) {
@@ -428,6 +439,7 @@ export class SlackConnector implements Connector {
               timestamp: (event as any).ts,
               name: emoji,
             });
+            this.conversations.recordBotEngaged(conversationKey);
           } catch (err) {
             logger.debug(`[slack] failed to add triage reaction: ${err}`);
           }
@@ -436,6 +448,7 @@ export class SlackConnector implements Connector {
         logger.info(`[slack] triage → reply (${decision.reason ?? "no reason"}) for ts=${(event as any).ts}`);
       }
 
+      this.conversations.recordBotEngaged(conversationKey);
       this.handler(msg);
     });
 
@@ -599,8 +612,8 @@ export class SlackConnector implements Connector {
       lastTs = res.ts;
     }
     // A newly-posted root message will be the thread_ts for any follow-up replies,
-    // so record it as active under its own ts.
-    if (lastTs) this.activeThreads.touch(target.channel, lastTs);
+    // so mark its future thread as bot-engaged.
+    if (lastTs) this.conversations.recordBotInitiatedThread(target.channel, lastTs);
     return lastTs;
   }
 
@@ -620,7 +633,7 @@ export class SlackConnector implements Connector {
     }
     // Record the thread the bot just replied in. Subsequent user replies in
     // this same thread will carry thread_ts === threadTs and bypass triage.
-    if (threadTs) this.activeThreads.touch(target.channel, threadTs);
+    if (threadTs) this.conversations.recordBotInitiatedThread(target.channel, threadTs);
     return lastTs;
   }
 
@@ -635,9 +648,10 @@ export class SlackConnector implements Connector {
     } catch (err) {
       logger.warn(`Failed to add reaction: ${err}`);
     }
-    // A reaction on a message also counts as participation; touch the target's
-    // thread anchor so follow-ups in that thread are treated as active.
-    this.activeThreads.touch(target.channel, target.thread || target.messageTs);
+    // A reaction on a message also counts as engagement; mark the target's
+    // thread anchor so follow-ups in that thread are treated as bot-engaged.
+    const anchor = target.thread || target.messageTs;
+    if (anchor) this.conversations.recordBotInitiatedThread(target.channel, anchor);
   }
 
   async removeReaction(target: Target, emoji: string) {
