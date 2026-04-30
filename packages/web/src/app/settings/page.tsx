@@ -91,6 +91,7 @@ const SLACK_APP_MANIFEST = JSON.stringify(
           "message.groups",
           "message.im",
           "message.mpim",
+          "reaction_added",
         ],
       },
       socket_mode_enabled: true,
