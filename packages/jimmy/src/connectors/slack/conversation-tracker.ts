@@ -50,18 +50,6 @@ export class ConversationTracker {
   }
 
   /**
-   * Compute the future thread key for a top-level message — the key that
-   * would apply if the bot replies in-thread to this message. Returns
-   * `null` if the message is already a thread reply (no future thread to
-   * prime) or required fields are missing.
-   */
-  static futureThreadKey(input: ConversationKeyInput): string | null {
-    if (!input.channel || !input.ts) return null;
-    if (input.threadTs && input.threadTs !== input.ts) return null;
-    return `${input.channel}:thread:${input.ts}`;
-  }
-
-  /**
    * Record a human speaker for the conversation key implied by the given
    * message. Adds the user to the `humanSpeakers` set; multiple distinct
    * users in the same key invalidates DM-equivalence.
@@ -74,23 +62,20 @@ export class ConversationTracker {
 
   /**
    * Mark the conversation as having received bot engagement (a reply, a
-   * reaction, or any other deliberate response). Once set, this flag is
-   * permanent for the key.
+   * reaction, or any other deliberate response) for the *current* key —
+   * the user-key for top-level messages, the thread-key for thread
+   * replies. Once set, this flag is permanent for the key.
    *
-   * For top-level user messages we also prime the *future* thread key
-   * (the thread the bot will create by replying), so follow-ups in that
-   * thread inherit the engagement state without a round-trip.
+   * Thread keys for bot-created threads are not primed here. The outbound
+   * paths (`recordBotInitiatedThread` from `replyMessage` / `sendMessage`)
+   * mark them when a thread actually materializes, which avoids retaining
+   * a permanent entry for every top-level message that never gets a reply.
    */
   recordBotEngaged(input: ConversationKeyInput): void {
     if (!input.userId) return;
     const primary = ConversationTracker.keyFor(input);
-    if (primary) {
-      this.markEngaged(primary, input.userId);
-    }
-    const future = ConversationTracker.futureThreadKey(input);
-    if (future && future !== primary) {
-      this.markEngaged(future, input.userId);
-    }
+    if (!primary) return;
+    this.markEngaged(primary, input.userId);
   }
 
   /**

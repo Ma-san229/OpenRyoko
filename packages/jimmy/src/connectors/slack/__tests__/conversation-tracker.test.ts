@@ -74,19 +74,26 @@ describe("ConversationTracker — DM-equivalent gating", () => {
 });
 
 describe("ConversationTracker — thread/channel-user bridging", () => {
-  it("primes the future thread key when the bot engages with a top-level message", () => {
+  it("does NOT prime the future thread key from receipt-time engagement (outbound is responsible)", () => {
     const t = new ConversationTracker();
     t.recordHumanMessage({ channel: "C1", ts: "T1", userId: "U1" });
     t.recordBotEngaged({ channel: "C1", ts: "T1", userId: "U1" });
 
-    expect(t.isDmEquivalent({ channel: "C1", threadTs: "T1", ts: "T2", userId: "U1" })).toBe(true);
+    // Thread key has not been touched yet — the user follow-up in thread
+    // should fall through to triage until the outbound path marks the
+    // thread (which the connector does at replyMessage time).
+    expect(t.isDmEquivalent({ channel: "C1", threadTs: "T1", ts: "T2", userId: "U1" })).toBe(false);
   });
 
-  it("user follow-up in thread inherits engagement primed at top level", () => {
+  it("full flow: user top-level → bot replies in thread (outbound marks thread) → user follow-up in thread is DM-equivalent", () => {
     const t = new ConversationTracker();
+    // 1. User posts top-level
     t.recordHumanMessage({ channel: "C1", ts: "T1", userId: "U1" });
+    // 2. Bot decides to engage at receipt time — marks user-key engaged
     t.recordBotEngaged({ channel: "C1", ts: "T1", userId: "U1" });
-
+    // 3. Bot calls replyMessage → outbound marks the thread anchor
+    t.recordBotInitiatedThread("C1", "T1");
+    // 4. User follows up in the thread
     t.recordHumanMessage({ channel: "C1", threadTs: "T1", ts: "T2", userId: "U1" });
     expect(t.isDmEquivalent({ channel: "C1", threadTs: "T1", ts: "T3", userId: "U1" })).toBe(true);
   });
