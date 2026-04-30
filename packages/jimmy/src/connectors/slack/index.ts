@@ -620,8 +620,10 @@ export class SlackConnector implements Connector {
       lastTs = res.ts;
     }
     // A newly-posted root message will be the thread_ts for any follow-up replies,
-    // so mark its future thread as bot-engaged.
-    if (lastTs) this.conversations.recordBotInitiatedThread(target.channel, lastTs);
+    // so mark its future thread as bot-engaged. Only relevant when triage is on.
+    if (lastTs && this.triageConfig?.enabled === true) {
+      this.conversations.recordBotInitiatedThread(target.channel, lastTs);
+    }
     return lastTs;
   }
 
@@ -641,7 +643,10 @@ export class SlackConnector implements Connector {
     }
     // Record the thread the bot just replied in. Subsequent user replies in
     // this same thread will carry thread_ts === threadTs and bypass triage.
-    if (threadTs) this.conversations.recordBotInitiatedThread(target.channel, threadTs);
+    // Only relevant when triage is on.
+    if (threadTs && this.triageConfig?.enabled === true) {
+      this.conversations.recordBotInitiatedThread(target.channel, threadTs);
+    }
     return lastTs;
   }
 
@@ -658,8 +663,11 @@ export class SlackConnector implements Connector {
     }
     // A reaction on a message also counts as engagement; mark the target's
     // thread anchor so follow-ups in that thread are treated as bot-engaged.
+    // Only relevant when triage is on.
     const anchor = target.thread || target.messageTs;
-    if (anchor) this.conversations.recordBotInitiatedThread(target.channel, anchor);
+    if (anchor && this.triageConfig?.enabled === true) {
+      this.conversations.recordBotInitiatedThread(target.channel, anchor);
+    }
   }
 
   async removeReaction(target: Target, emoji: string) {
