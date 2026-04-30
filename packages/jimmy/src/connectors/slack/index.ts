@@ -402,7 +402,13 @@ export class SlackConnector implements Connector {
         ts: (event as any).ts as string | undefined,
         userId: slackUserId,
       };
-      this.conversations.recordHumanMessage(conversationKey);
+      // Skip conversation tracking entirely when triage is disabled — it
+      // serves no purpose (skipTriage is unconditionally true) and engaged
+      // entries can't be evicted, so doing it would leak memory in the
+      // default no-triage configuration.
+      if (triageEnabled) {
+        this.conversations.recordHumanMessage(conversationKey);
+      }
       const isDmEquivalent =
         triageEnabled && channelType !== "im" && !wasMentioned
           ? this.conversations.isDmEquivalent(conversationKey)
@@ -448,7 +454,9 @@ export class SlackConnector implements Connector {
         logger.info(`[slack] triage → reply (${decision.reason ?? "no reason"}) for ts=${(event as any).ts}`);
       }
 
-      this.conversations.recordBotEngaged(conversationKey);
+      if (triageEnabled) {
+        this.conversations.recordBotEngaged(conversationKey);
+      }
       this.handler(msg);
     });
 
