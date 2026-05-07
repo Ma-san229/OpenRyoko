@@ -17,6 +17,7 @@ import {
   ORG_DIR,
   CLAUDE_SKILLS_DIR,
   AGENTS_SKILLS_DIR,
+  MIGRATIONS_DIR,
 } from "../shared/paths.js";
 import { initDb } from "../sessions/registry.js";
 import { getPackageVersion } from "../shared/version.js";
@@ -421,6 +422,47 @@ export async function runSetup(opts?: { force?: boolean }): Promise<void> {
     created.push(agentsMdPath);
   }
 
+  // Copy persona / memory skeleton MDs (OpenClaw-style).
+  // Each file is created once on first init; never overwritten on later runs.
+  //
+  // BOOTSTRAP.md is the one-time first-run ritual file. The agent deletes it
+  // after onboarding completes, and `ryoko setup` must NOT recreate it on
+  // subsequent runs. We treat "no persona files present" as the trigger to
+  // place BOOTSTRAP.md — this covers BOTH:
+  //   1. Brand-new workspaces (first `ryoko setup` ever)
+  //   2. Existing pre-persona-layer workspaces upgrading from older OpenRyoko
+  // Both cases legitimately need onboarding to populate IDENTITY/SOUL/MEMORY.
+  // After the agent deletes BOOTSTRAP.md, persona files exist, so future
+  // `ryoko setup` runs skip BOOTSTRAP creation.
+  const personaFiles = ["IDENTITY.md", "SOUL.md", "MEMORY.md", "TOOLS.md"];
+  const needsBootstrap = personaFiles.every((f) => !fs.existsSync(path.join(JINN_HOME, f)));
+
+  for (const filename of personaFiles) {
+    const destPath = path.join(JINN_HOME, filename);
+    const templatePath = path.join(TEMPLATE_DIR, filename);
+    if (fs.existsSync(destPath)) continue;
+    if (!fs.existsSync(templatePath)) continue;
+    let source = fs.readFileSync(templatePath, "utf-8");
+    source = applyTemplateReplacements(source, templateReplacements);
+    ensureFile(destPath, source);
+    created.push(destPath);
+  }
+
+  if (needsBootstrap) {
+    const bootstrapDest = path.join(JINN_HOME, "BOOTSTRAP.md");
+    const bootstrapTemplate = path.join(TEMPLATE_DIR, "BOOTSTRAP.md");
+    if (!fs.existsSync(bootstrapDest) && fs.existsSync(bootstrapTemplate)) {
+      let source = fs.readFileSync(bootstrapTemplate, "utf-8");
+      source = applyTemplateReplacements(source, templateReplacements);
+      ensureFile(bootstrapDest, source);
+      created.push(bootstrapDest);
+    }
+  }
+
+  // Daily-notes directory for memory/YYYY-MM-DD.md
+  const memoryDir = path.join(JINN_HOME, "memory");
+  if (ensureDir(memoryDir)) created.push(memoryDir);
+
   // 6. Initialize SQLite database
   try {
     initDb();
@@ -453,6 +495,11 @@ export async function runSetup(opts?: { force?: boolean }): Promise<void> {
   created.push(...copyTemplateDir(path.join(TEMPLATE_DIR, "docs"), DOCS_DIR, templateReplacements));
   created.push(...copyTemplateDir(path.join(TEMPLATE_DIR, "skills"), SKILLS_DIR, templateReplacements));
   created.push(...copyTemplateDir(path.join(TEMPLATE_DIR, "org"), ORG_DIR, templateReplacements));
+
+  // Migrations are copied so the migrate skill can list pending versions from
+  // ~/.ryoko/migrations/. Existing applied migrations stay (skip-if-exists),
+  // and new versions become available next time the user upgrades the package.
+  created.push(...copyTemplateDir(path.join(TEMPLATE_DIR, "migrations"), MIGRATIONS_DIR, templateReplacements));
 
   // Copy skills.json manifest
   const templateSkillsJson = path.join(TEMPLATE_DIR, "skills.json");
