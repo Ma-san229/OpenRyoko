@@ -21,6 +21,12 @@ import {
 } from "../shared/paths.js";
 import { initDb } from "../sessions/registry.js";
 import { getPackageVersion } from "../shared/version.js";
+import {
+  applyTemplateReplacements,
+  isTemplateFile,
+  readPortalName,
+  buildTemplateReplacements,
+} from "../shared/templateReplacements.js";
 
 const GREEN = "\x1b[32m";
 const YELLOW = "\x1b[33m";
@@ -86,21 +92,6 @@ function ensureFile(filePath: string, content: string): boolean {
 }
 
 /**
- * Apply template placeholder replacements to file content.
- * Only applies to .md and .yaml files.
- */
-function applyTemplateReplacements(
-  content: string,
-  replacements: Record<string, string>,
-): string {
-  let result = content;
-  for (const [placeholder, value] of Object.entries(replacements)) {
-    result = result.replaceAll(placeholder, value);
-  }
-  return result;
-}
-
-/**
  * Recursively copy template directory contents into dest, skipping files that already exist.
  * Applies template placeholder replacements to .md and .yaml files.
  * Returns list of created file paths.
@@ -127,8 +118,7 @@ function copyTemplateDir(
       continue;
     } else if (!fs.existsSync(destPath)) {
       fs.mkdirSync(path.dirname(destPath), { recursive: true });
-      const ext = path.extname(entry.name).toLowerCase();
-      if (replacements && (ext === ".md" || ext === ".yaml" || ext === ".yml")) {
+      if (replacements && isTemplateFile(entry.name)) {
         const content = fs.readFileSync(srcPath, "utf-8");
         fs.writeFileSync(destPath, applyTemplateReplacements(content, replacements), "utf-8");
       } else {
@@ -389,18 +379,9 @@ export async function runSetup(opts?: { force?: boolean }): Promise<void> {
   }
 
   // Read portal name from config for template replacements
-  const portalName = (() => {
-    try {
-      const cfg = yaml.load(fs.readFileSync(CONFIG_PATH, "utf-8")) as any;
-      return cfg?.portal?.portalName || "Ryoko";
-    } catch { return "Ryoko"; }
-  })();
+  const portalName = readPortalName();
   const portalSlug = portalName.toLowerCase().replace(/\s+/g, "-");
-
-  const templateReplacements: Record<string, string> = {
-    "{{portalName}}": portalName,
-    "{{portalSlug}}": portalSlug,
-  };
+  const templateReplacements = buildTemplateReplacements(portalName);
 
   const claudeMdPath = path.join(JINN_HOME, "CLAUDE.md");
   if (!fs.existsSync(claudeMdPath)) {

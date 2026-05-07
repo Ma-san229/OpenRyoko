@@ -18,6 +18,12 @@ import {
   getInstanceVersion,
   getPendingMigrations,
 } from "../shared/version.js";
+import {
+  applyTemplateReplacements,
+  isTemplateFile,
+  readPortalName,
+  buildTemplateReplacements,
+} from "../shared/templateReplacements.js";
 
 const GREEN = "\x1b[32m";
 const YELLOW = "\x1b[33m";
@@ -211,6 +217,11 @@ async function applyAutoMigrations(
 ): Promise<void> {
   let applied = 0;
 
+  // Resolve portal name once so template files (.md/.yaml) get the same
+  // {{portalName}} substitution as `ryoko setup` would apply.
+  const portalName = readPortalName();
+  const replacements = buildTemplateReplacements(portalName);
+
   for (const version of pending) {
     const migrationDir = path.join(MIGRATIONS_DIR, version);
     const filesDir = path.join(migrationDir, "files");
@@ -220,23 +231,41 @@ async function applyAutoMigrations(
       continue;
     }
 
-    // Copy new files (skip files that already exist)
-    const newFiles = collectFiles(filesDir, filesDir);
-    for (const relPath of newFiles) {
-      const destPath = path.join(JINN_HOME, relPath);
+    // Walk the migration's files/ tree and apply each entry.
+    // Directories are ensured (mkdir -p) so that empty dirs declared via
+    // .gitkeep are also propagated to the instance home.
+    const entries = collectEntries(filesDir, filesDir);
+    for (const entry of entries) {
+      const destPath = path.join(JINN_HOME, entry.relPath);
+
+      if (entry.type === "dir") {
+        if (!fs.existsSync(destPath)) {
+          fs.mkdirSync(destPath, { recursive: true });
+          console.log(`  ${GREEN}[new]${RESET} ${entry.relPath}/`);
+          applied++;
+        }
+        continue;
+      }
+
       if (!fs.existsSync(destPath)) {
         fs.mkdirSync(path.dirname(destPath), { recursive: true });
-        fs.copyFileSync(path.join(filesDir, relPath), destPath);
-        console.log(`  ${GREEN}[new]${RESET} ${relPath}`);
+        const srcPath = path.join(filesDir, entry.relPath);
+        if (isTemplateFile(entry.relPath)) {
+          const content = fs.readFileSync(srcPath, "utf-8");
+          fs.writeFileSync(destPath, applyTemplateReplacements(content, replacements), "utf-8");
+        } else {
+          fs.copyFileSync(srcPath, destPath);
+        }
+        console.log(`  ${GREEN}[new]${RESET} ${entry.relPath}`);
         applied++;
 
         // If it's a skill, create symlinks
-        const parts = relPath.split(path.sep);
+        const parts = entry.relPath.split(path.sep);
         if (parts[0] === "skills" && parts.length >= 2) {
           ensureSkillSymlinks(parts[1]);
         }
       } else {
-        console.log(`  ${YELLOW}[skip]${RESET} ${relPath} (exists — needs AI merge)`);
+        console.log(`  ${YELLOW}[skip]${RESET} ${entry.relPath} (exists — needs AI merge)`);
       }
     }
   }
@@ -252,16 +281,24 @@ async function applyAutoMigrations(
   console.log(`\n${DIM}Tip: Run ${RESET}jinn migrate${DIM} (without --auto) to also merge updated files with AI.${RESET}\n`);
 }
 
-/** Recursively collect relative file paths under a directory. */
-function collectFiles(baseDir: string, currentDir: string): string[] {
-  const files: string[] = [];
+type FsEntry = { type: "file" | "dir"; relPath: string };
+
+/**
+ * Recursively walk a directory and return both file and directory entries.
+ * Files named `.gitkeep` are skipped (they exist only to retain empty dirs
+ * in git); the parent directory is still emitted so the empty dir is created.
+ */
+function collectEntries(baseDir: string, currentDir: string): FsEntry[] {
+  const out: FsEntry[] = [];
   for (const entry of fs.readdirSync(currentDir, { withFileTypes: true })) {
     const fullPath = path.join(currentDir, entry.name);
+    const relPath = path.relative(baseDir, fullPath);
     if (entry.isDirectory()) {
-      files.push(...collectFiles(baseDir, fullPath));
+      out.push({ type: "dir", relPath });
+      out.push(...collectEntries(baseDir, fullPath));
     } else if (entry.name !== ".gitkeep") {
-      files.push(path.relative(baseDir, fullPath));
+      out.push({ type: "file", relPath });
     }
   }
-  return files;
+  return out;
 }
