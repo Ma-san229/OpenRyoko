@@ -13,6 +13,7 @@ import { formatResponse, downloadAttachment } from "./format.js";
 import { normalizeSpeakerInfo, type SpeakerInfo } from "./speaker.js";
 import { runTriage } from "./triage.js";
 import { ConversationTracker } from "./conversation-tracker.js";
+import { AgentsCanvasUpdater } from "./agents-canvas.js";
 import type { SlackTriageConfig } from "../../shared/types.js";
 import { TMP_DIR } from "../../shared/paths.js";
 import { logger } from "../../shared/logger.js";
@@ -41,6 +42,7 @@ export class SlackConnector implements Connector {
   private readonly portalName: string | undefined;
   private readonly operatorName: string | undefined;
   private readonly conversations: ConversationTracker;
+  private readonly agentsCanvas: AgentsCanvasUpdater | null;
   private static CHANNEL_CACHE_TTL_MS = 3600_000; // 1 hour
   private static USER_CACHE_TTL_MS = 3600_000; // 1 hour
 
@@ -120,6 +122,9 @@ export class SlackConnector implements Connector {
     this.portalName = context.portalName;
     this.operatorName = context.operatorName;
     this.conversations = new ConversationTracker();
+    this.agentsCanvas = config.agentsCanvas?.enabled
+      ? new AgentsCanvasUpdater(this.app, config.agentsCanvas)
+      : null;
   }
 
   private async resolveSpeakerInfo(userId: string | undefined): Promise<SpeakerInfo | null> {
@@ -160,7 +165,7 @@ export class SlackConnector implements Connector {
       wasMentioned: boolean;
       messageText: string;
     },
-  ): Promise<{ action: "silent" | "react" | "reply"; emoji?: string; reason?: string }> {
+  ): Promise<{ action: "silent" | "react" | "reply"; emoji?: string; reason?: string; goalCondition?: string; longRunning?: boolean }> {
     const threadLimit = this.triageConfig?.threadContextLimit ?? 10;
     const recentThread = await this.fetchRecentThreadForTriage(
       event.channel,
@@ -452,6 +457,16 @@ export class SlackConnector implements Connector {
           return;
         }
         logger.info(`[slack] triage → reply (${decision.reason ?? "no reason"}) for ts=${(event as any).ts}`);
+
+        // Natural-language /goal injection.
+        // Triage may have detected an autonomous-completion intent ("止まらないで動いて",
+        // "完成したら教えて" etc.) and distilled it into a goalCondition. Prepend
+        // `/goal <cond>` to the prompt so Claude Code v2.1.139+ holds a Stop hook
+        // until the condition is met.
+        if (decision.goalCondition) {
+          logger.info(`[slack] triage → /goal: ${decision.goalCondition.slice(0, 80)}`);
+          msg.text = `/goal ${decision.goalCondition}\n\n${msg.text}`;
+        }
       }
 
       if (triageEnabled) {
@@ -574,9 +589,11 @@ export class SlackConnector implements Connector {
     this.started = true;
     this.lastError = null;
     logger.info("Slack connector started (socket mode)");
+    this.agentsCanvas?.start();
   }
 
   async stop() {
+    this.agentsCanvas?.stop();
     for (const interval of this.typingIntervals.values()) {
       clearInterval(interval);
     }

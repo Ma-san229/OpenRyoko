@@ -118,4 +118,76 @@ describe("parseTriageDecision", () => {
     const d = parseTriageDecision(`{"action":"silent","reason":"${longReason}"}`);
     expect(d?.reason?.length).toBeLessThanOrEqual(120);
   });
+
+  it("extracts goalCondition and longRunning on reply", () => {
+    const d = parseTriageDecision(
+      '{"action":"reply","reason":"long task","goalCondition":"Posted a 5-SaaS comparison table to the thread","longRunning":true}',
+    );
+    expect(d?.action).toBe("reply");
+    expect(d?.goalCondition).toBe("Posted a 5-SaaS comparison table to the thread");
+    expect(d?.longRunning).toBe(true);
+  });
+
+  it("ignores goalCondition when action is not reply", () => {
+    const d = parseTriageDecision(
+      '{"action":"silent","goalCondition":"some condition","longRunning":true}',
+    );
+    expect(d?.goalCondition).toBeUndefined();
+    expect(d?.longRunning).toBeUndefined();
+  });
+
+  it("requires longRunning=true to extract goalCondition", () => {
+    // Haiku occasionally produces a condition for a routine reply. We only
+    // honor it when it also marks the request as long-running.
+    const d = parseTriageDecision(
+      '{"action":"reply","goalCondition":"some condition","longRunning":false}',
+    );
+    expect(d?.goalCondition).toBeUndefined();
+    expect(d?.longRunning).toBeUndefined();
+  });
+
+  it("treats empty / missing goalCondition as undefined", () => {
+    const d = parseTriageDecision('{"action":"reply","reason":"normal"}');
+    expect(d?.goalCondition).toBeUndefined();
+    expect(d?.longRunning).toBeUndefined();
+  });
+
+  it("truncates overly long goalCondition", () => {
+    const longGoal = "x".repeat(800);
+    const d = parseTriageDecision(
+      `{"action":"reply","longRunning":true,"goalCondition":"${longGoal}"}`,
+    );
+    expect(d?.goalCondition?.length).toBeLessThanOrEqual(400);
+  });
+
+  it("rejects goalCondition that starts with a slash", () => {
+    // Hardens against prompt-injection: an attacker-controlled goalCondition
+    // like "/permission grant ..." must not be injected as a second slash
+    // command after the leading /goal.
+    const d = parseTriageDecision(
+      '{"action":"reply","longRunning":true,"goalCondition":"/permission grant"}',
+    );
+    expect(d?.goalCondition).toBeUndefined();
+  });
+
+  it("flattens embedded newlines in goalCondition to a single line", () => {
+    const d = parseTriageDecision(
+      JSON.stringify({
+        action: "reply",
+        longRunning: true,
+        goalCondition: "Step one.\nStep two.\nDone.",
+      }),
+    );
+    expect(d?.goalCondition).toBe("Step one. Step two. Done.");
+    expect(d?.goalCondition?.includes("\n")).toBe(false);
+  });
+});
+
+describe("buildTriagePrompt — goalCondition", () => {
+  it("includes the autonomous-completion intent block", () => {
+    const prompt = buildTriagePrompt(baseInput());
+    expect(prompt).toContain("Autonomous-completion intent");
+    expect(prompt).toContain("goalCondition");
+    expect(prompt).toContain("longRunning");
+  });
 });

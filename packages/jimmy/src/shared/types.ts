@@ -344,6 +344,19 @@ export interface SlackConnectorConfig {
   ignoreOldMessagesOnBoot?: boolean;
   /** Air-reading triage: decide per-message whether to reply/react/stay silent */
   triage?: SlackTriageConfig;
+  /** Self-updating Slack Canvas mirroring OpenRyoko's current sessions (Agents View). */
+  agentsCanvas?: {
+    /** Master switch — defaults to false when the block is absent. */
+    enabled?: boolean;
+    /** Slack channel ID to host the canvas in. If unset, a standalone canvas is created. */
+    channelId?: string;
+    /** Canvas title. Default: "Ryoko Agents View". */
+    title?: string;
+    /** Refresh interval in ms (min 5000, default 30000). */
+    pollIntervalMs?: number;
+    /** Max sessions rendered per status group. Default 10. */
+    maxPerGroup?: number;
+  };
 }
 
 export interface DiscordConnectorConfig {
