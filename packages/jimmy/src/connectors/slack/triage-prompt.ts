@@ -35,20 +35,6 @@ export interface TriageDecision {
   action: "silent" | "react" | "reply";
   emoji?: string;
   reason?: string;
-  /**
-   * Set when the operator's message expresses an autonomous-completion intent
-   * (e.g. "完成するまで止まらないで動いて", "終わったらSlackで教えて").
-   * A single sentence describing an objective completion condition that
-   * Claude Code can self-check. Injected as a `/goal` prefix to the engine
-   * prompt so the v2.1.139 Stop-hook keeps the session working until the
-   * condition holds.
-   */
-  goalCondition?: string;
-  /**
-   * Hint that the requested work is expected to take many turns / long time.
-   * Reserved for future use (e.g. switching to `claude --bg`).
-   */
-  longRunning?: boolean;
 }
 
 const MAX_MESSAGE_CHARS = 2000;
@@ -100,21 +86,13 @@ You decide whether ${botName} should respond to a specific incoming message.
 # Output format (STRICT)
 Output EXACTLY ONE JSON object, nothing else. No markdown, no prose, no code fences.
 Schema:
-  {
-    "action": "silent" | "react" | "reply",
-    "emoji": "<slack-emoji-name>",
-    "reason": "<=30 chars",
-    "goalCondition": "<objective completion condition, 1 sentence>",
-    "longRunning": true | false
-  }
+  {"action": "silent" | "react" | "reply", "emoji": "<slack-emoji-name>", "reason": "<=30 chars"}
 
 - "silent" — do absolutely nothing. No reply, no reaction. The bot stays invisible.
 - "react"  — add ONE emoji reaction and nothing else (no text reply). Choose a Slack emoji name without colons (e.g. "eyes", "thumbsup", "pray", "ok_hand", "dog", "white_check_mark").
 - "reply"  — ${botName} should write a real text response.
 
 "emoji" is required only when action = "react". Omit or leave empty otherwise.
-"goalCondition" and "longRunning" are only meaningful when action = "reply".
-Omit them (or set to null / false) otherwise.
 
 # About ${botName}
 ${personaBlock}
@@ -150,20 +128,6 @@ ${truncatedMessage}
 - Do not reply just to be polite or to say "I see" / "interesting" — add value or stay out.
 - If your confidence that ${botName} should speak is below ~60%, choose "silent".
 - Prefer "react" over "reply" for pure acknowledgments. A single emoji is often enough.
-
-# Autonomous-completion intent (only when action = "reply")
-If the message expresses that ${botName} should keep working autonomously across
-many turns until a specific outcome is reached — phrases like
-"完成するまで止まらないで動いて", "終わったらSlackで教えて", "全部終わったら報告",
-"〜になるまで動いて", "keep going until X", "don't stop until Y",
-"do it all and report when done" — set:
-  - "longRunning": true
-  - "goalCondition": one sentence stating an OBJECTIVE completion condition
-    that ${botName} can self-check from its own work, expressed as a final state
-    (e.g. "Posted a Markdown table comparing the pricing of 5 SaaS products to this Slack thread").
-    Do NOT include vague conditions like "the user is satisfied".
-    Do NOT echo the speaker's whole message — distill it.
-Otherwise leave "goalCondition" omitted/null and "longRunning" false.
 
 # Output
 Produce the JSON object now. Do not explain. Do not wrap in a code block. JSON only.`;
@@ -205,25 +169,10 @@ export function parseTriageDecision(raw: string): TriageDecision | null {
   const emoji = rawEmoji.replace(/^:+|:+$/g, "") || undefined;
   const reason = typeof obj.reason === "string" ? obj.reason.trim().slice(0, 120) : undefined;
 
-  const longRunning = obj.longRunning === true && action === "reply" ? true : undefined;
-  // LLM output sanitization for goalCondition.
-  // It is injected verbatim into the engine prompt as `/goal <cond>`, so we
-  // must guarantee a single-line condition that cannot smuggle a second
-  // slash-command, a backtick code fence, or control characters. We also
-  // only keep the condition when longRunning is also true — Haiku tends to
-  // over-eagerly produce conditions for routine messages.
-  const rawGoal = typeof obj.goalCondition === "string" ? obj.goalCondition : "";
-  // eslint-disable-next-line no-control-regex
-  const goalFlat = rawGoal.replace(/[ -]/g, " ").replace(/\s+/g, " ").trim();
-  const goalCondition =
-    goalFlat && action === "reply" && longRunning === true && !goalFlat.startsWith("/")
-      ? goalFlat.slice(0, 400)
-      : undefined;
-
   // Action "react" requires an emoji; default to eyes if missing
   if (action === "react" && !emoji) {
     return { action, emoji: "eyes", reason };
   }
 
-  return { action, emoji, reason, goalCondition, longRunning };
+  return { action, emoji, reason };
 }
