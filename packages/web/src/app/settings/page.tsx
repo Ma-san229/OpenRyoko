@@ -1440,6 +1440,27 @@ export default function SettingsPage() {
                 >
                   Agents View Canvas
                 </div>
+                {/*
+                  Discovery hint for retroactive enablement: if the user has
+                  already configured Slack tokens but hasn't enabled Canvas,
+                  surface a gentle nudge so they don't miss the feature.
+                */}
+                {(config.connectors?.slack?.appToken && config.connectors?.slack?.botToken) &&
+                  !config.connectors?.slack?.agentsCanvas?.enabled && (
+                    <div
+                      className="mx-[var(--space-2)] mb-[var(--space-3)] p-[var(--space-3)] rounded-[var(--radius-md)] border border-[var(--accent-fill)] bg-[color-mix(in_srgb,var(--accent-fill)_30%,transparent)]"
+                    >
+                      <div className="text-[length:var(--text-subheadline)] font-[var(--weight-semibold)] text-[var(--text-primary)] mb-[var(--space-1)]">
+                        💡 Slack 連携済みです — Canvas も有効化してみませんか？
+                      </div>
+                      <div className="text-[length:var(--text-caption1)] text-[var(--text-secondary)]">
+                        いま動いている全 Ryoko セッションが Slack の Canvas タブにライブ表示されます。
+                        下の「有効化」を ON にしてチャンネルを選ぶだけで30秒以内に作成されます。
+                        必要 scope は <code className="text-[var(--accent)]">canvases:write</code> と
+                        <code className="text-[var(--accent)] ml-1">canvases:read</code>（manifest を貼り直して reinstall すれば自動）。
+                      </div>
+                    </div>
+                  )}
                 <p
                   className="text-[length:var(--text-caption1)] text-[var(--text-secondary)] mb-[var(--space-2)] px-[var(--space-2)]"
                 >
