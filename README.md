@@ -1,4 +1,4 @@
-# 🐕 OpenRyoko
+# 🌸 OpenRyoko
 
 **Slackで空気を読み、必要な時だけ発言し、頼まれた仕事は最後までやり切る AI 同僚。**
 
@@ -51,13 +51,13 @@ WebUI の onboarding wizard が `/goal` / Canvas / triage を案内するので�
 
 ---
 
-## 🐕 OpenRyoko 独自の差別化
+## 🌸 OpenRyoko 独自の差別化
 
 [Jinn](https://github.com/hristo2612/jinn) からは「常駐デーモン + マルチエンジン + AI組織 + Webダッシュボード + Cron + Skills + MCP」の枠を継承していますが、**Slack 上で AI同僚として実用に耐える挙動**は OpenRyoko のためにフルに作り直しました。
 
 ### Slack 振る舞い系（全て OpenRyoko 独自）
 
-- 🐕 **空気読みトリアージ** — Haiku で `silent / react / reply` を判定。雑談・横の会話には介入しない保守的設計
+- 🌸 **空気読みトリアージ** — Haiku で `silent / react / reply` を判定。雑談・横の会話には介入しない保守的設計
 - 🎯 **自然言語 `/goal`** — 「最後までやって」「完成するまで止まらないで」「終わったら教えて」等の意図を Haiku が拾い、Claude Code の Stop hook を起動
 - 🖼️ **Agents View Canvas** — 全 Ryoko セッションを Slack の Canvas タブにライブ同期。設定 UI から channel picker でワンクリック有効化
 - 💬 **ターン毎の個別投稿** — `/goal` で多ターン回した時、Claude の各ターンの応答が個別の Slack メッセージとして到着（進捗が見える）
@@ -101,7 +101,7 @@ OpenRyoko は Claude Code CLI を子プロセスとして起動するため、An
 
 OpenRyoko は独自のプロンプトエンジニアリング層を持ちません。Claude Code が既にツール利用・ファイル編集・マルチステップ推論・記憶・**`/goal` の Stop hook** を担当しているので、OpenRyoko はそれを外の世界（Slack、cron、WebUI、Canvas）に接続するだけ。Claude Code が進化すれば、OpenRyoko も自動的に強くなります。
 
-### 🐕 空気読みの判断フロー
+### 🌸 空気読みの判断フロー
 
 ```
 受信メッセージ
