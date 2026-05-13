@@ -774,12 +774,66 @@ export async function startGateway(
   // At runtime __dirname is dist/src/gateway/, so ../../web resolves to dist/web/
   const webDir = path.resolve(__dirname, "..", "..", "web");
 
+  // Loopback Host header guard.
+  //
+  // The gateway binds to 127.0.0.1 by default but every API route is
+  // unauthenticated, which makes the daemon vulnerable to classic DNS
+  // rebinding from any browser tab on the same machine: an attacker page
+  // can resolve a hostile DNS name to 127.0.0.1 and then `fetch()` against
+  // our endpoints. We reject any request whose `Host` header isn't a
+  // loopback / explicit-bind value the operator has configured.
+  const configuredHost = config.gateway.host || "127.0.0.1";
+  const LOOPBACK_HOSTNAMES = new Set([
+    "127.0.0.1",
+    "[::1]",
+    "::1",
+    "localhost",
+  ]);
+  function hostIsAllowed(hostHeader: string | undefined): boolean {
+    if (!hostHeader) return false;
+    // Strip port for comparison; "host:port" or "[::1]:port".
+    const lastColon = hostHeader.lastIndexOf(":");
+    const closingBracket = hostHeader.lastIndexOf("]");
+    const hostname = lastColon > closingBracket
+      ? hostHeader.slice(0, lastColon)
+      : hostHeader;
+    if (LOOPBACK_HOSTNAMES.has(hostname)) return true;
+    if (hostname === configuredHost) return true;
+    // Bare-IP case where the operator pinned to a LAN address.
+    if (configuredHost === "0.0.0.0") return true; // explicit opt-in: any host
+    return false;
+  }
+
   // Create HTTP server
   const server = http.createServer((req, res) => {
     const url = req.url || "/";
 
-    // CORS headers for development
-    res.setHeader("Access-Control-Allow-Origin", "*");
+    // Host header check before anything else — applies to both API and
+    // static asset paths so a malicious cross-origin browser tab can't
+    // pull session JSON either.
+    if (!hostIsAllowed(req.headers.host)) {
+      res.writeHead(421, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "host_not_allowed" }));
+      return;
+    }
+
+    // CORS: restrict to localhost-style origins by default. The operator
+    // can broaden via `gateway.host = 0.0.0.0`, in which case we mirror
+    // the request's Origin header (still safer than a blanket `*`).
+    const origin = req.headers.origin as string | undefined;
+    if (origin && configuredHost !== "0.0.0.0") {
+      try {
+        const u = new URL(origin);
+        if (LOOPBACK_HOSTNAMES.has(u.hostname)) {
+          res.setHeader("Access-Control-Allow-Origin", origin);
+          res.setHeader("Vary", "Origin");
+        }
+      } catch { /* invalid Origin header — leave CORS unset */ }
+    } else if (origin && configuredHost === "0.0.0.0") {
+      // explicit opt-in: reflect the origin (subject to operator policy)
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
+    }
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 

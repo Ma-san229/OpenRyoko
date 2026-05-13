@@ -138,3 +138,108 @@ describe("renderCanvasMarkdown", () => {
     expect(md).toContain("**with-meta** _(slack · @ryoko)_");
   });
 });
+
+describe("renderCanvasMarkdown — user-controlled string defang", () => {
+  // Regression coverage for security review M1: a malicious session title
+  // (or connector / employee field) must not be able to ping anyone or
+  // hijack the canvas Markdown structure.
+  it("strips Slack <@U…> user mentions", () => {
+    const md = renderCanvasMarkdown(
+      [makeSession({ status: "running", title: "ping <@U0123456> hi" })],
+      { nowMs: FIXED_NOW },
+    );
+    expect(md).toContain("(user)");
+    expect(md).not.toMatch(/<@U\d/);
+  });
+
+  it("strips Slack <@U…|alias> aliased user mentions but keeps the label", () => {
+    const md = renderCanvasMarkdown(
+      [makeSession({ status: "running", title: "by <@U0123456|alice> done" })],
+      { nowMs: FIXED_NOW },
+    );
+    expect(md).toContain("alice");
+    expect(md).not.toContain("<@U");
+  });
+
+  it("strips Slack <#C…> channel links", () => {
+    const md = renderCanvasMarkdown(
+      [makeSession({ status: "running", title: "see <#C09U11F6KEG>" })],
+      { nowMs: FIXED_NOW },
+    );
+    expect(md).toContain("(channel)");
+    expect(md).not.toContain("<#C");
+  });
+
+  it("rewrites <#C…|name> channel links to #name", () => {
+    const md = renderCanvasMarkdown(
+      [makeSession({ status: "running", title: "from <#C123|agent-ops>" })],
+      { nowMs: FIXED_NOW },
+    );
+    expect(md).toContain("#agent-ops");
+    expect(md).not.toContain("<#C");
+  });
+
+  it("strips Slack <!channel>, <!here>, <!everyone> broadcast mentions", () => {
+    const md = renderCanvasMarkdown(
+      [
+        makeSession({ id: "a", status: "running", title: "<!channel> heads up" }),
+        makeSession({ id: "b", status: "running", title: "<!here> attention" }),
+        makeSession({ id: "c", status: "running", title: "<!everyone> all hands" }),
+      ],
+      { nowMs: FIXED_NOW },
+    );
+    expect(md).toContain("(channel)");
+    expect(md).toContain("(here)");
+    expect(md).toContain("(everyone)");
+    expect(md).not.toMatch(/<![a-z]+>/);
+  });
+
+  it("inserts a zero-width space inside bare @channel / @here / @everyone", () => {
+    const md = renderCanvasMarkdown(
+      [makeSession({ status: "running", title: "hey @channel team" })],
+      { nowMs: FIXED_NOW },
+    );
+    // zero-width space (U+200B) between @ and the keyword breaks the ping
+    expect(md).toMatch(/@​channel/);
+  });
+
+  it("strips Slack subteam mentions (<!subteam^S…>)", () => {
+    const md = renderCanvasMarkdown(
+      [makeSession({ status: "running", title: "for <!subteam^SAZ94GDB8>" })],
+      { nowMs: FIXED_NOW },
+    );
+    expect(md).toContain("(group)");
+    expect(md).not.toContain("<!subteam");
+  });
+
+  it("escapes Markdown emphasis / heading / blockquote / table / strike chars", () => {
+    const md = renderCanvasMarkdown(
+      [
+        makeSession({
+          status: "running",
+          title: "# big *bold* `code` ~~strike~~ > quote | col [link]",
+        }),
+      ],
+      { nowMs: FIXED_NOW },
+    );
+    expect(md).toContain("\\#");
+    expect(md).toContain("\\*");
+    expect(md).toContain("\\`");
+    expect(md).toContain("\\~");
+    expect(md).toContain("\\>");
+    expect(md).toContain("\\|");
+    expect(md).toContain("\\[");
+    expect(md).toContain("\\]");
+  });
+
+  it("collapses embedded newlines so list items don't break", () => {
+    const md = renderCanvasMarkdown(
+      [makeSession({ status: "running", title: "line1\nline2\n# inject" })],
+      { nowMs: FIXED_NOW },
+    );
+    // The title should land on one logical line (no Markdown line break);
+    // every Markdown control character is escaped.
+    expect(md.split("\n").filter((l) => l.includes("line1")).length).toBe(1);
+    expect(md).toContain("\\#");
+  });
+});

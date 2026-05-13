@@ -294,6 +294,24 @@ Claude Code v2.1.139+ で追加された `/goal` コマンドを、Slackの自�
 
 設定はホットリロード対応なので、デーモン再起動は不要です。
 
+## 🔒 セキュリティ運用上の注意
+
+OpenRyoko は **個人マシン or 信頼境界内の VPS で 1 人 / 1 チームが使う前提**で
+設計されています。本番運用する場合は以下を必ず守ってください：
+
+- **`gateway.host` はデフォルト `127.0.0.1` のままにする**。外部公開する場合は必ず
+  前段に **認証付きリバースプロキシ**（Tailscale Funnel + nginx basic auth、Cloudflare
+  Access、Caddy with mTLS 等）を置く。daemon 自体は API 認証を持たない。
+- **`connectors.slack.allowFrom` を必ず設定する**。空欄だとワークスペース全員が
+  Ryoko を駆動でき、`/goal` の自然言語起動と組み合わさると秘密情報の流出経路に
+  なり得る。trusted user の Slack ID をホワイトリストで明示すること。
+- **Slack Bot の権限はそのまま Ryoko の権限**。Bot に `chat:write` `files:read` 等が
+  付与されている以上、Slack の任意ユーザが promptインジェクション経由で Ryoko に
+  これらを使わせる可能性は理論上残る。`allowFrom` の絞り込みが第一防御線。
+- **Loopback Host header guard / 限定 CORS** を v2026.5.13 から有効化。`gateway.host`
+  が `127.0.0.1` の時は loopback origin 以外からの API 呼び出しを 421 で拒否する。
+  これにより DNS rebinding によるローカルブラウザ経由の attack をブロック。
+
 ## 🔗 Jinn からの移行
 
 既に `~/.jinn/` で Jinn を運用している場合、OpenRyoko は初回起動時に自動でディレクトリを `~/.ryoko/` にリネームします。トークン・セッション履歴・スキル・組織ファイルはすべてそのまま引き継がれます。
