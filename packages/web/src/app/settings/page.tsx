@@ -48,6 +48,8 @@ const SLACK_APP_MANIFEST = JSON.stringify(
       scopes: {
         bot: [
           "app_mentions:read",
+          "canvases:read",
+          "canvases:write",
           "channels:history",
           "channels:read",
           "chat:write",
@@ -133,6 +135,13 @@ interface Config {
         timeoutMs?: number
         threadContextLimit?: number
         persona?: string
+      }
+      agentsCanvas?: {
+        enabled?: boolean
+        channelId?: string
+        title?: string
+        pollIntervalMs?: number
+        maxPerGroup?: number
       }
     }
     discord?: {
@@ -619,6 +628,13 @@ export default function SettingsPage() {
   // Employees list for instance binding
   const [employees, setEmployees] = useState<Array<{name: string, displayName: string}>>([])
 
+  // Slack channels for the Agents View canvas channel picker.
+  // We only fetch when the bot tokens are present, since hitting the API
+  // without credentials just returns an error and a confusing spinner.
+  const [slackChannels, setSlackChannels] = useState<Array<{ id: string; name: string; isPrivate: boolean }> | null>(null)
+  const [slackChannelsLoading, setSlackChannelsLoading] = useState(false)
+  const [slackChannelsError, setSlackChannelsError] = useState<string | null>(null)
+
   useEffect(() => {
     api.getOrg().then((org: any) => {
       if (org?.employees) {
@@ -626,6 +642,33 @@ export default function SettingsPage() {
       }
     }).catch(() => {})
   }, [])
+
+  const refreshSlackChannels = async () => {
+    setSlackChannelsLoading(true)
+    setSlackChannelsError(null)
+    try {
+      const res = await fetch("/api/connectors/slack/channels")
+      const body = await res.json()
+      if (!body?.ok) {
+        const err = body?.error || `HTTP ${res.status}`
+        if (err === "missing_scope") {
+          setSlackChannelsError("Bot に canvases / channels scope が足りません。上のSlack App Manifestを貼り直して再インストールしてください。")
+        } else if (err === "slack_not_configured") {
+          setSlackChannelsError("Slack コネクタが未起動です。先に Bot Token / App Token を保存して再起動してください。")
+        } else {
+          setSlackChannelsError(`チャンネル取得失敗: ${err}`)
+        }
+        setSlackChannels(null)
+      } else {
+        setSlackChannels(body.channels ?? [])
+      }
+    } catch (err) {
+      setSlackChannelsError(err instanceof Error ? err.message : String(err))
+      setSlackChannels(null)
+    } finally {
+      setSlackChannelsLoading(false)
+    }
+  }
 
   // Sync local values when settings change externally (e.g., reset)
   useEffect(() => {
@@ -1389,6 +1432,131 @@ export default function SettingsPage() {
                       )
                     }
                     placeholder="claude"
+                  />
+                </FieldRow>
+
+                <div
+                  className="text-[length:var(--text-caption1)] font-[var(--weight-semibold)] text-[var(--text-tertiary)] mt-[var(--space-3)] mb-[var(--space-2)]"
+                >
+                  Agents View Canvas
+                </div>
+                <p
+                  className="text-[length:var(--text-caption1)] text-[var(--text-secondary)] mb-[var(--space-2)] px-[var(--space-2)]"
+                >
+                  今動いている Ryoko のセッション一覧（running / waiting / errored / idle）
+                  を Slack の Canvas に自動同期します。指定したチャンネル直下のタブとして
+                  常に最新状態が見えるようになります。Bot に
+                  <code className="mx-1 text-[var(--accent)]">canvases:write</code>
+                  と
+                  <code className="mx-1 text-[var(--accent)]">canvases:read</code>
+                  scope が必要です（上の Slack App Manifest を貼り直して reinstall すれば
+                  自動で揃います）。
+                </p>
+                <FieldRow label="有効化">
+                  <ToggleSwitch
+                    checked={config.connectors?.slack?.agentsCanvas?.enabled ?? false}
+                    onChange={(v) =>
+                      updateConfig(["connectors", "slack", "agentsCanvas", "enabled"], v)
+                    }
+                  />
+                </FieldRow>
+                <FieldRow label="表示先チャンネル">
+                  <div className="flex w-full gap-[var(--space-2)] items-center">
+                    {slackChannels && slackChannels.length > 0 ? (
+                      <select
+                        className="flex-1 bg-[var(--surface-secondary)] border border-[var(--separator)] rounded-[var(--radius-control)] px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--text-body)]"
+                        value={config.connectors?.slack?.agentsCanvas?.channelId ?? ""}
+                        onChange={(e) =>
+                          updateConfig(
+                            ["connectors", "slack", "agentsCanvas", "channelId"],
+                            e.target.value || undefined,
+                          )
+                        }
+                      >
+                        <option value="">— 選択してください —</option>
+                        {slackChannels.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.isPrivate ? "🔒 " : "#"}{c.name}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <SettingsInput
+                        value={config.connectors?.slack?.agentsCanvas?.channelId ?? ""}
+                        onChange={(v) =>
+                          updateConfig(
+                            ["connectors", "slack", "agentsCanvas", "channelId"],
+                            v.trim() || undefined,
+                          )
+                        }
+                        placeholder="C01234ABCDE — bot が member のチャンネル"
+                      />
+                    )}
+                    <button
+                      type="button"
+                      onClick={refreshSlackChannels}
+                      disabled={slackChannelsLoading}
+                      className="px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--text-caption1)] bg-[var(--surface-secondary)] border border-[var(--separator)] rounded-[var(--radius-control)] hover:bg-[var(--surface-tertiary)] disabled:opacity-50"
+                    >
+                      {slackChannelsLoading ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : slackChannels ? (
+                        "更新"
+                      ) : (
+                        "読み込み"
+                      )}
+                    </button>
+                  </div>
+                </FieldRow>
+                {slackChannelsError ? (
+                  <p className="text-[length:var(--text-caption1)] text-[var(--accent-red,#ef4444)] px-[var(--space-2)] -mt-[var(--space-1)] mb-[var(--space-2)]">
+                    {slackChannelsError}
+                  </p>
+                ) : null}
+                <FieldRow label="Canvas タイトル">
+                  <SettingsInput
+                    value={config.connectors?.slack?.agentsCanvas?.title ?? ""}
+                    onChange={(v) =>
+                      updateConfig(
+                        ["connectors", "slack", "agentsCanvas", "title"],
+                        v.trim() || undefined,
+                      )
+                    }
+                    placeholder="Ryoko Agents View"
+                  />
+                </FieldRow>
+                <FieldRow label="更新間隔 (ms)">
+                  <SettingsInput
+                    type="number"
+                    value={
+                      config.connectors?.slack?.agentsCanvas?.pollIntervalMs !== undefined
+                        ? String(config.connectors.slack.agentsCanvas.pollIntervalMs)
+                        : ""
+                    }
+                    onChange={(v) =>
+                      updateConfig(
+                        ["connectors", "slack", "agentsCanvas", "pollIntervalMs"],
+                        v.trim() ? Number(v) : undefined,
+                      )
+                    }
+                    placeholder="30000（30秒, 最小 5000）"
+                  />
+                </FieldRow>
+                <FieldRow label="グループ毎の最大表示件数">
+                  <SettingsInput
+                    type="number"
+                    value={
+                      config.connectors?.slack?.agentsCanvas?.maxPerGroup !== undefined
+                        ? String(config.connectors.slack.agentsCanvas.maxPerGroup)
+                        : ""
+                    }
+                    onChange={(v) =>
+                      updateConfig(
+                        ["connectors", "slack", "agentsCanvas", "maxPerGroup"],
+                        v.trim() ? Number(v) : undefined,
+                      )
+                    }
+                    placeholder="10"
                   />
                 </FieldRow>
 

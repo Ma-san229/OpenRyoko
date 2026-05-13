@@ -635,6 +635,46 @@ export class SlackConnector implements Connector {
     };
   }
 
+  /**
+   * Enumerate channels the bot is a member of. Used by the settings UI to
+   * populate the Agents View canvas channel picker.
+   *
+   * Public channels and private groups the bot has been invited to are both
+   * included; DMs/MPIMs are filtered out (canvases live in channels, not
+   * direct messages).
+   */
+  async listChannels(): Promise<Array<{ id: string; name: string; isPrivate: boolean; isMember: boolean }>> {
+    const out: Array<{ id: string; name: string; isPrivate: boolean; isMember: boolean }> = [];
+    let cursor: string | undefined;
+    // Bound the loop so a misbehaving workspace can't make us iterate forever.
+    for (let page = 0; page < 20; page++) {
+      const res = await this.app.client.conversations.list({
+        types: "public_channel,private_channel",
+        exclude_archived: true,
+        limit: 200,
+        cursor,
+      });
+      const channels = (res.channels ?? []) as unknown as Array<Record<string, unknown>>;
+      for (const c of channels) {
+        const id = typeof c.id === "string" ? c.id : undefined;
+        const name = typeof c.name === "string" ? c.name : undefined;
+        if (!id || !name) continue;
+        // bot must be a member to post a canvas in the channel
+        if (c.is_member !== true) continue;
+        out.push({
+          id,
+          name,
+          isPrivate: c.is_private === true,
+          isMember: true,
+        });
+      }
+      cursor = res.response_metadata?.next_cursor || undefined;
+      if (!cursor) break;
+    }
+    out.sort((a, b) => a.name.localeCompare(b.name));
+    return out;
+  }
+
   reconstructTarget(replyContext: ReplyContext): Target {
     return {
       channel: typeof replyContext.channel === "string" ? replyContext.channel : "",

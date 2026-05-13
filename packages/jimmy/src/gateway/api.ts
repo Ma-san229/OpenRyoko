@@ -1571,6 +1571,26 @@ Handle this as a priority request from a colleague.`;
       return json(res, { qr: dataUrl });
     }
 
+    // GET /api/connectors/slack/channels — channels the bot is a member of.
+    // Used by the settings UI to populate the Agents View canvas channel picker.
+    if (method === "GET" && pathname === "/api/connectors/slack/channels") {
+      const slackConnector = context.connectors.get("slack");
+      if (!slackConnector) {
+        return json(res, { ok: false, error: "slack_not_configured" }, 400);
+      }
+      const lister = (slackConnector as unknown as { listChannels?: () => Promise<Array<{ id: string; name: string; isPrivate: boolean; isMember: boolean }>> }).listChannels;
+      if (typeof lister !== "function") {
+        return json(res, { ok: false, error: "list_channels_unsupported" }, 400);
+      }
+      try {
+        const channels = await lister.call(slackConnector);
+        return json(res, { ok: true, channels });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return json(res, { ok: false, error: msg }, 502);
+      }
+    }
+
     // GET /api/connectors — list available connectors
     if (method === "GET" && pathname === "/api/connectors") {
       const connectors = Array.from(context.connectors.entries()).map(([instanceId, connector]) => ({
