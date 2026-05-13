@@ -218,6 +218,7 @@ export async function startGateway(
             allowFrom: cfg.connectors.slack.allowFrom,
             ignoreOldMessagesOnBoot: cfg.connectors.slack.ignoreOldMessagesOnBoot,
             triage: cfg.connectors.slack.triage,
+            agentsCanvas: cfg.connectors.slack.agentsCanvas,
           },
           {
             portalName: cfg.portal?.portalName,
