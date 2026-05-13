@@ -1,52 +1,47 @@
 import { describe, it, expect } from "vitest";
 import {
+  shouldExtractGoal,
   hasGoalIntent,
   buildGoalExtractionPrompt,
   parseGoalExtractionResult,
 } from "../goal-extractor.js";
 
-describe("hasGoalIntent — JP", () => {
+describe("shouldExtractGoal — accepts substantive messages", () => {
   it.each([
-    "OpenRyokoの解説Webサイトの作成。完成するまで止まらないで動いて",
-    "終わったらSlackで教えて",
-    "全部終わったら報告ちょうだい",
-    "最後までやってみて",
-    "最後まで完遂してね",
-    "完了するまで頑張って",
-    "終わるまで動いて",
-    "ノンストップで仕上げて",
-    "完成したら教えて",
-    "止めないで",
-    "止まらず最後まで",
-  ])("matches %s", (text) => {
-    expect(hasGoalIntent(text)).toBe(true);
+    // Substantive task requests (Haiku will decide if they need /goal)
+    "OpenRyokoのGithub調査して紹介資料作成まで「最後までやって」",
+    "5社のSaaSを比較した表をスレッドに投げて",
+    "数字1から3までを別々のターンで出して完了と書いたら止まる",
+    "ブログ記事のドラフトを書いて",
+    "Just tell me about Tailscale",
+  ])("accepts %s", (text) => {
+    expect(shouldExtractGoal(text)).toBe(true);
   });
 });
 
-describe("hasGoalIntent — EN", () => {
-  it.each([
-    "Keep going until done",
-    "don't stop until finished",
-    "dont stop until you finish",
-    "Until complete, please continue",
-    "Finish the whole thing",
-    "Finish the entire project before stopping",
-    "Just go all the way and report back",
-  ])("matches %s", (text) => {
-    expect(hasGoalIntent(text)).toBe(true);
+describe("shouldExtractGoal — skips trivial / pre-prefixed messages", () => {
+  it("skips empty", () => {
+    expect(shouldExtractGoal("")).toBe(false);
+  });
+  it("skips whitespace-only", () => {
+    expect(shouldExtractGoal("   \n\t  ")).toBe(false);
+  });
+  it("skips very short acknowledgements", () => {
+    expect(shouldExtractGoal("ok")).toBe(false);
+    expect(shouldExtractGoal("thanks")).toBe(false);
+    expect(shouldExtractGoal("はい")).toBe(false);
+    expect(shouldExtractGoal("👍")).toBe(false);
+  });
+  it("skips messages already prefixed with /goal", () => {
+    expect(shouldExtractGoal("/goal Posted the comparison\n\nfollow up")).toBe(false);
   });
 });
 
-describe("hasGoalIntent — negatives", () => {
-  it.each([
-    "",
-    "ちょっと質問なんだけど、これってどう思う？",
-    "ありがとう、助かった",
-    "Quick question about Tailscale",
-    "I finished my coffee", // contains "finish" but not as an instruction
-    "明日までによろしく",
-  ])("does not match %s", (text) => {
-    expect(hasGoalIntent(text)).toBe(false);
+describe("hasGoalIntent (deprecated alias)", () => {
+  it("forwards to shouldExtractGoal", () => {
+    expect(hasGoalIntent("a substantive request")).toBe(true);
+    expect(hasGoalIntent("ok")).toBe(false);
+    expect(hasGoalIntent("")).toBe(false);
   });
 });
 
@@ -62,17 +57,26 @@ describe("buildGoalExtractionPrompt", () => {
     expect(p).toContain("JSON only");
   });
 
+  it("biases the LLM toward null on ambiguity", () => {
+    const p = buildGoalExtractionPrompt("anything");
+    expect(p).toContain('{"condition": null}');
+    expect(p).toContain("be conservative");
+    expect(p).toMatch(/when in doubt[, ]+null/i);
+  });
+
+  it("documents the four trigger families (keep-going, notify, embedded stop, pipeline)", () => {
+    const p = buildGoalExtractionPrompt("anything");
+    expect(p).toContain("完成するまで止まらないで");
+    expect(p).toContain("終わったらSlackで教えて");
+    expect(p).toContain("完了と書いたら止まる");
+    expect(p).toContain("AUTONOMOUSLY ACROSS MANY TURNS");
+  });
+
   it("truncates very long messages", () => {
     const huge = "x".repeat(5000);
     const p = buildGoalExtractionPrompt(huge);
     expect(p).toContain("…(truncated)");
-    // The prompt scaffolding should keep growth bounded — well under 5000+scaffold.
-    expect(p.length).toBeLessThan(huge.length + 2500);
-  });
-
-  it("includes guidance to refuse vague cases", () => {
-    const p = buildGoalExtractionPrompt("anything");
-    expect(p).toContain('"condition": null');
+    expect(p.length).toBeLessThan(huge.length + 4000);
   });
 });
 
@@ -107,7 +111,7 @@ describe("parseGoalExtractionResult — happy path", () => {
 
   it("strips control characters", () => {
     const out = parseGoalExtractionResult(
-      JSON.stringify({ condition: "Done with task X" }),
+      JSON.stringify({ condition: "Done with task X" }),
     );
     expect(out).toBe("Done with task X");
   });

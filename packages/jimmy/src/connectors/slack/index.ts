@@ -14,7 +14,7 @@ import { normalizeSpeakerInfo, type SpeakerInfo } from "./speaker.js";
 import { runTriage } from "./triage.js";
 import { ConversationTracker } from "./conversation-tracker.js";
 import { AgentsCanvasUpdater } from "./agents-canvas.js";
-import { extractGoalCondition, hasGoalIntent } from "./goal-extractor.js";
+import { extractGoalCondition, shouldExtractGoal } from "./goal-extractor.js";
 import type { SlackTriageConfig } from "../../shared/types.js";
 import { TMP_DIR } from "../../shared/paths.js";
 import { logger } from "../../shared/logger.js";
@@ -474,9 +474,12 @@ export class SlackConnector implements Connector {
       // the extractor here, at the single point every reply-bound message
       // passes through.
       //
-      // Failures degrade silently: keyword gate first (no LLM cost) and a
-      // 15s hard cap on the Haiku call so latency never goes runaway.
-      if (!msg.text.startsWith("/goal ") && hasGoalIntent(msg.text)) {
+      // The earlier keyword-regex approach missed natural Japanese phrasings
+      // ("完了と書いたら止まる" without "最後までやって" etc.) so we now
+      // always defer to a Haiku call gated only by a cheap length check.
+      // Haiku returns null fast for non-goal messages; sanitisation in the
+      // parser blocks slash-prefix injection and sentinel placeholders.
+      if (shouldExtractGoal(msg.text)) {
         try {
           const condition = await extractGoalCondition(msg.text);
           if (condition) {
