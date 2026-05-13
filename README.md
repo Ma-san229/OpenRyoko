@@ -1,8 +1,10 @@
 # 🐕 OpenRyoko
 
-Slackで空気を読んで働くAIゲートウェイ。必要なときだけ発言し、雑談には入らない。Claude Code / Codex / Gemini CLI を統合するデーモン型のアシスタント基盤です。
+**Slackで空気を読み、必要な時だけ発言し、頼まれた仕事は最後までやり切る AI 同僚。**
 
-> OpenRyokoは [Jinn](https://github.com/hristo2612/jinn)（MIT License, by Hristo Stoyanov）をベースにした日本語ファーストの派生版です。
+「最後までやって」と言えば自律で動き続け、進捗は Slack の Canvas にライブ表示。
+Claude Code v2.1.139+ の `/goal` Stop hook と Agent View をネイティブに Slack に橋渡しした、
+**Slackファースト・日本語ファースト**の常駐AIゲートウェイです。
 
 <p align="center">
   <img src="assets/ryoko-avatar.jpeg" alt="Ryoko" width="240" />
@@ -12,38 +14,101 @@ Slackで空気を読んで働くAIゲートウェイ。必要なときだけ発�
   <img src="assets/jinn-showcase.gif" alt="OpenRyoko Web Dashboard" width="800" />
 </p>
 
-## 🐕 OpenRyokoとは
+> 🪶 OpenRyokoは [Jinn](https://github.com/hristo2612/jinn)（MIT License, by Hristo Stoyanov）の AI 組織・cron・Web ダッシュボードといった土台レイヤーを継承しつつ、Slack 上での**振る舞い** — 空気読み・自律完遂・状態可視化 — に集中して大きく前進した設計です。
 
-OpenRyokoは、Claude Code CLI / Codex SDK / Gemini CLI をひとつの常駐デーモンにまとめ、Slack等のチャンネルに「AI同僚」として配置できるゲートウェイです。OpenRyokoはバス（導管）であり、脳ではありません — 知能はラップするCLI側に任せ、OpenRyokoは「どこに流すか／誰に任せるか／いつ沈黙するか」を担当します。
+---
 
-### Jinn との違い（OpenRyoko独自の追加機能）
+## 💡 OpenRyokoが解く問題
 
-- **発言者認識**: SlackのユーザーIDからdisplay nameを解決し、operatorと混同しないように system prompt を組み立てる
-- **空気読みトリアージ**: メッセージごとに軽量LLM（Haikuをデフォルト採用）で `silent / react / reply` を判定。メンションされない限り基本沈黙、自分が役に立てる話題にだけ介入
-- **日本語デフォルト**: UI・CLI・設定テンプレートが日本語
-- **`~/.ryoko` ホームディレクトリ**: 既存 `~/.jinn` からの自動マイグレーション付き
+社内 Slack に AI を住まわせると、すぐ3つの壁にぶつかります：
 
-## 💡 なぜOpenRyokoか
+1. **「うざい」問題** — 雑談に割り込んでくる、誰宛か分からない発言に毎回反応する
+2. **「中途半端」問題** — 1ターンで返事して止まる。長い作業の途中でユーザーが「続けて」「次は？」を投げ続けないといけない
+3. **「見えない」問題** — 何が動いてるのか、何が詰まってるのか、Slack の会話ログを遡らないと分からない
 
-### 🔑 Anthropic Maxサブスクリプションで動く
+OpenRyoko はこの3つを**Slack側のメカニズムごと用意**して解決します：
 
-OpenRyokoはClaude Code CLIを子プロセスとして起動するため、Anthropicの公式クライアントとして扱われ、[月額$200のMaxサブスクリプション](https://www.anthropic.com/pricing)の枠内で動作します。APIトークン従量課金ではありません。
+| 問題 | OpenRyoko の解 | 実装 |
+|---|---|---|
+| ① うざい | **空気読みトリアージ** — メッセージ毎に Haiku が silent/react/reply を判定。確信度60%未満は黙る | `slack/triage.ts` |
+| ② 中途半端 | **自然言語 `/goal`** — 「最後までやって」等を Haiku が検出 → Claude Code の Stop hook を自動起動 → 各ターンの応答が個別 Slack メッセージで届く | `slack/goal-extractor.ts` + `engines/claude.ts` |
+| ③ 見えない | **Agents View Canvas** — running/waiting/errored/idle の全セッションを Slack チャンネルのタブとして30秒毎ライブ同期 | `slack/agents-canvas.ts` |
 
-空気読みトリアージは軽量Haikuを使いますが、こちらもClaude Code CLI経由なのでMaxサブスクに含まれます（$0）。
+---
+
+## ⚡ 30秒で始める
+
+```bash
+npm install -g openryoko
+ryoko setup
+ryoko start
+```
+
+ブラウザで [http://localhost:7777](http://localhost:7777) → Settings → Slack に Bot Token を貼って保存。
+WebUI の onboarding wizard が `/goal` / Canvas / triage を案内するので、迷わず有効化できます。
+
+> 💡 Slack 機能をフルに使うには **Claude Code v2.1.139 以降**が必要です（`/goal` コマンド対応）。`npm install -g @anthropic-ai/claude-code@latest` で最新化してください。
+
+---
+
+## 🐕 OpenRyoko 独自の差別化
+
+[Jinn](https://github.com/hristo2612/jinn) からは「常駐デーモン + マルチエンジン + AI組織 + Webダッシュボード + Cron + Skills + MCP」の枠を継承していますが、**Slack 上で AI同僚として実用に耐える挙動**は OpenRyoko のためにフルに作り直しました。
+
+### Slack 振る舞い系（全て OpenRyoko 独自）
+
+- 🐕 **空気読みトリアージ** — Haiku で `silent / react / reply` を判定。雑談・横の会話には介入しない保守的設計
+- 🎯 **自然言語 `/goal`** — 「最後までやって」「完成するまで止まらないで」「終わったら教えて」等の意図を Haiku が拾い、Claude Code の Stop hook を起動
+- 🖼️ **Agents View Canvas** — 全 Ryoko セッションを Slack の Canvas タブにライブ同期。設定 UI から channel picker でワンクリック有効化
+- 💬 **ターン毎の個別投稿** — `/goal` で多ターン回した時、Claude の各ターンの応答が個別の Slack メッセージとして到着（進捗が見える）
+- 👤 **発言者認識** — Slack ID から display name を解決し、operator と他者を system prompt 上で明示区別
+- 🧵 **DM-equivalent 検出** — チャンネル内でも「ボット + 自分だけの会話」を検出して triage を skip、自然な対話を実現
+- 📡 **Telegram コネクタ** — Jinn には無い 4 つ目のコネクタ
+
+### セキュリティ / 運用系（全て OpenRyoko 独自）
+
+- 🔒 **Loopback Host header guard + 限定 CORS** — DNS rebinding 対策。`gateway.host = 127.0.0.1` デフォルトで安全
+- 🌐 **会話型オンボーディング** — Ryoko 自身が新規ユーザーに名前・役割・好みを聞いて `~/.ryoko/knowledge/` に保存
+- ✨ **Onboarding ウィザード** — Web UI 初回起動時に Slack 機能（`/goal` / Canvas / triage）を視覚的に紹介
+- 💡 **Inline discovery hint** — Slack tokens 設定済みで Canvas 未有効なら設定画面で気づかせる
+- 🧠 **Persona / Memory レイヤー** — `ryoko update` で自動マイグレーションされる人格・記憶テンプレート
+- 🏠 **`~/.ryoko` ホームディレクトリ** — `~/.jinn` からの自動マイグレーション付き、日本語ファースト
+
+### Jinn から継承している土台（変えていない強み）
+
+- 🔌 **3エンジン対応** — Claude Code CLI + Codex SDK + Gemini CLI
+- 💬 **マルチコネクタ** — Slack / Discord / WhatsApp / Telegram
+- 👥 **AI 組織システム** — 部門・階級・マネージャー・従業員・タスクボード
+- 🌐 **Web ダッシュボード** — チャット / 組織図 / カンバン / コスト追跡 / cron 可視化
+- ⏰ **Cron スケジューリング** — ホットリロード対応
+- 🔄 **ホットリロード** — config / cron / org ファイルを再起動なしで反映
+- 🛠️ **自己改変** — エージェントが自分の設定・スキル・組織を実行中に編集可能
+- 📦 **スキルシステム** — Markdown プレイブックでエンジンが native に従う
+- 🏢 **マルチインスタンス** — 複数の Ryoko を並列起動
+- 🔗 **MCP 対応** — 任意の MCP サーバーに接続
+
+---
+
+## 💎 設計哲学
+
+### 🔑 Anthropic Max サブスクリプションで動く
+
+OpenRyoko は Claude Code CLI を子プロセスとして起動するため、Anthropic の公式クライアントとして扱われ、[月額$200の Max サブスクリプション](https://www.anthropic.com/pricing)の枠内で動作します。APIトークン従量課金ではありません。
+
+空気読みトリアージと `/goal` 抽出は軽量 Haiku を使いますが、これも Claude Code CLI 経由なので Max サブスクに含まれます（$0）。
 
 ### 🧠 「バス、脳ではない」哲学
 
-OpenRyokoは独自のプロンプトエンジニアリング層を持ちません。Claude Codeが既にツール利用・ファイル編集・マルチステップ推論・記憶を担当しているので、OpenRyokoはそれを外の世界（Slack、cron、WebUI）に接続するだけ。Claude Codeが進化すれば、OpenRyokoも自動的に強くなります。
+OpenRyoko は独自のプロンプトエンジニアリング層を持ちません。Claude Code が既にツール利用・ファイル編集・マルチステップ推論・記憶・**`/goal` の Stop hook** を担当しているので、OpenRyoko はそれを外の世界（Slack、cron、WebUI、Canvas）に接続するだけ。Claude Code が進化すれば、OpenRyoko も自動的に強くなります。
 
-### 🐕 空気読み能力
-
-「うざくならず、必要な時には出てくる」を守るため、Slackメッセージは受信時に以下のフローで判定されます：
+### 🐕 空気読みの判断フロー
 
 ```
 受信メッセージ
   ├─ DM？               ──→ 常に返信
   ├─ @メンション？       ──→ 常に返信
-  └─ グレーゾーン        ──→ 軽量LLM（Haiku）でトリアージ
+  ├─ DM相当の会話？      ──→ 常に返信（一度engage済み + 1ユーザーだけの会話）
+  └─ グレーゾーン        ──→ Haiku でトリアージ
                              ├─ silent → 何もしない
                              ├─ react  → 絵文字スタンプだけ付ける
                              └─ reply  → 本エンジンで返信
@@ -56,23 +121,6 @@ OpenRyokoは独自のプロンプトエンジニアリング層を持ちませ�
 - それ以外 → silent（雑談には絶対に割り込まない）
 
 確信度 60% 未満なら silent に倒す保守的設計です。
-
-## ✨ 主要機能
-
-- 🔌 **3エンジン対応** — Claude Code CLI + Codex SDK + Gemini CLI
-- 💬 **コネクタ** — Slack（スレッド・リアクション・空気読み）、WhatsApp、Discord、Telegram
-- 🎯 **自然言語 `/goal`** — 「最後までやって」「完成するまで止まらないで」等の Slack 発言を検出し、Claude Code v2.1.139+ の `/goal` Stop hookを自動起動。複数ターンの作業結果はそれぞれ独立した Slack メッセージとして届く
-- 🖼️ **Agents View Canvas** — 現在動いている全 Ryoko セッションを Slack の Canvas にライブ同期。チャンネルのタブから「いま何が走っているか」がひと目で分かる
-- 📎 **ファイル添付** — Web チャットにドラッグ&ドロップしたファイルをエンジンへパススルー
-- 📱 **モバイル対応** — サイドバー折りたたみ・モバイル向けダッシュボード
-- ⏰ **Cron スケジューリング** — ホットリロード対応のバックグラウンドジョブ
-- 👥 **AI組織システム** — 部門・階級・マネージャー・従業員・タスクボード
-- 🌐 **Web ダッシュボード** — チャット、組織図、カンバン、コスト追跡、cron可視化
-- 🔄 **ホットリロード** — config、cron、組織ファイルを再起動なしで反映
-- 🛠️ **自己改変** — エージェントが自分の設定・スキル・組織を実行中に編集可能
-- 📦 **スキルシステム** — エンジンがネイティブに従う再利用可能なMarkdownプレイブック
-- 🏢 **マルチインスタンス** — 複数のOpenRyokoインスタンスを並列起動
-- 🔗 **MCP対応** — 任意のMCPサーバーに接続
 
 ## 🚀 クイックスタート
 
@@ -330,8 +378,9 @@ OpenRyoko は **個人マシン or 信頼境界内の VPS で 1 人 / 1 チー�
 
 ## 🙏 謝辞
 
-- 本体の 95% は [Jinn](https://github.com/hristo2612/jinn) のコードそのものです。素晴らしい基盤を公開してくれた Hristo Stoyanov 氏に感謝します
-- Web ダッシュボードのUIコンポーネントは [ClawPort UI](https://github.com/JohnRiceML/clawport-ui) by John Rice を基礎にしています
+- **デーモン・組織・cron・Webダッシュボード・skills・MCP** といった土台レイヤーは [Jinn](https://github.com/hristo2612/jinn) by Hristo Stoyanov のコードを継承しています。素晴らしい基盤を公開してくれた Hristo 氏に感謝します
+- Web ダッシュボードの UI コンポーネントは [ClawPort UI](https://github.com/JohnRiceML/clawport-ui) by John Rice を基礎にしています
+- `/goal` 自然言語化・Slack Canvas 同期・空気読みトリアージ等 **Slack 振る舞い系の機能**は OpenRyoko 独自実装で、上流に汎用化できる部分は Jinn に PR を送る方針です
 
 ## 🤝 コントリビュート
 
