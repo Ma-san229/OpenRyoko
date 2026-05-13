@@ -106,10 +106,12 @@ export class ClaudeEngine implements InterruptibleEngine {
   }
 
   private async runOnce(opts: EngineRunOpts): Promise<EngineResult> {
-    const streaming = !!opts.onStream;
-    const args = ["-p", "--output-format", streaming ? "stream-json" : "json", "--verbose", "--dangerously-skip-permissions", "--chrome"];
-
-    if (streaming) args.push("--include-partial-messages");
+    // Always use stream-json so the engine can capture every assistant turn
+    // in a multi-turn `/goal` session, not just the final one. The legacy
+    // single-JSON path threw away intermediate turns. Delta callbacks fire
+    // only when the caller provides `opts.onStream`.
+    const streaming = true;
+    const args = ["-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions", "--chrome", "--include-partial-messages"];
     if (opts.resumeSessionId) args.push("--resume", opts.resumeSessionId);
     if (opts.model) args.push("--model", opts.model);
     if (opts.effortLevel && opts.effortLevel !== "default") args.push("--effort", opts.effortLevel);
@@ -155,10 +157,16 @@ export class ClaudeEngine implements InterruptibleEngine {
       let rateLimitInfo: EngineRateLimitInfo | undefined;
       let lineCount = 0;
       let inTool = false;
+      // Per-turn text capture: each `assistant` event carries the full text
+      // snapshot of one turn's message (keyed by message.id). For
+      // multi-turn sessions (driven by /goal) this lets us surface every
+      // intermediate turn to the caller, not just the final result.
+      const turnTextById = new Map<string, string>();
+      const turnOrder: string[] = [];
 
       const STDERR_MAX = 10 * 1024; // 10KB rolling window for error reporting
 
-      if (streaming && opts.onStream) {
+      if (streaming) {
         const onStream = opts.onStream;
         let lineBuf = "";
 
@@ -170,6 +178,13 @@ export class ClaudeEngine implements InterruptibleEngine {
           const lines = lineBuf.split("\n");
           lineBuf = lines.pop() || "";
           for (const line of lines) {
+            // Track per-turn text snapshots from raw `assistant` events
+            // before they're transformed into deltas. Each turn emits one
+            // (or more, with --include-partial-messages) `assistant` event
+            // with the full text-so-far; the LAST snapshot per message.id
+            // is the final text for that turn.
+            this.captureTurnText(line, turnTextById, turnOrder);
+
             const parsed = this.processStreamLine(line, lineCount++, inTool);
             if (!parsed) continue;
 
@@ -185,17 +200,17 @@ export class ClaudeEngine implements InterruptibleEngine {
 
             if (parsed.type === "__tool_start") {
               inTool = true;
-              onStream(parsed.delta);
+              onStream?.(parsed.delta);
               continue;
             }
 
             if (parsed.type === "__tool_end") {
               inTool = false;
-              onStream(parsed.delta);
+              onStream?.(parsed.delta);
               continue;
             }
 
-            onStream(parsed.delta);
+            onStream?.(parsed.delta);
           }
         });
       } else {
@@ -238,6 +253,11 @@ export class ClaudeEngine implements InterruptibleEngine {
           return;
         }
 
+        const turns = turnOrder
+          .map((id) => turnTextById.get(id) ?? "")
+          .map((t) => t.trim())
+          .filter((t) => t.length > 0);
+
         if (code === 0) {
           if (streaming && lastResultMsg) {
             const extracted = this.buildEngineResultFromResultEvent(
@@ -245,6 +265,7 @@ export class ClaudeEngine implements InterruptibleEngine {
               String(lastResultMsg.result || ""),
               opts.resumeSessionId,
               rateLimitInfo,
+              turns,
             );
             if (extracted.error) opts.onStream?.({ type: "error", content: extracted.error });
             resolve(extracted);
@@ -268,7 +289,7 @@ export class ClaudeEngine implements InterruptibleEngine {
 
         // Non-zero exit code — if we still got a structured "result" message, use it.
         if (streaming && lastResultMsg) {
-          resolve(this.extractResult(lastResultMsg, opts.resumeSessionId, rateLimitInfo));
+          resolve(this.extractResult(lastResultMsg, opts.resumeSessionId, rateLimitInfo, turns));
           return;
         }
 
@@ -304,6 +325,7 @@ export class ClaudeEngine implements InterruptibleEngine {
             String(lastResultMsg.result || ""),
             opts.resumeSessionId,
             rateLimitInfo,
+            turns,
           );
           if (extracted.error) opts.onStream?.({ type: "error", content: extracted.error });
           resolve(extracted);
@@ -347,6 +369,45 @@ export class ClaudeEngine implements InterruptibleEngine {
         reject(new Error(errMsg));
       });
     });
+  }
+
+  /**
+   * Inspect a raw stream-json line and, if it is an `assistant` event,
+   * record the latest text snapshot for that turn (keyed by message.id).
+   *
+   * Stream-json with `--include-partial-messages` emits multiple snapshots
+   * per turn as text accumulates; the LAST snapshot per id is the turn's
+   * final text. For multi-turn `/goal` sessions each turn produces its own
+   * message.id, so iterating `turnTextById` in insertion order yields the
+   * chronological turn outputs.
+   */
+  private captureTurnText(
+    line: string,
+    turnTextById: Map<string, string>,
+    turnOrder: string[],
+  ): void {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    let msg: Record<string, unknown>;
+    try {
+      msg = JSON.parse(trimmed);
+    } catch {
+      return;
+    }
+    if (msg.type !== "assistant") return;
+    const message = msg.message as Record<string, unknown> | undefined;
+    if (!message) return;
+    const id = typeof message.id === "string" ? message.id : null;
+    if (!id) return;
+    const content = message.content as Array<Record<string, unknown>> | undefined;
+    if (!Array.isArray(content)) return;
+    const text = content
+      .filter((b) => b.type === "text" && typeof b.text === "string")
+      .map((b) => b.text as string)
+      .join("");
+    if (!text) return;
+    if (!turnTextById.has(id)) turnOrder.push(id);
+    turnTextById.set(id, text);
   }
 
   private processStreamLine(
@@ -450,6 +511,7 @@ export class ClaudeEngine implements InterruptibleEngine {
     finalText: string,
     fallbackSessionId?: string,
     rateLimit?: EngineRateLimitInfo,
+    turns?: string[],
   ): EngineResult {
     const isError = resultEvent.is_error === true || rateLimit?.status === "rejected";
     return {
@@ -460,6 +522,7 @@ export class ClaudeEngine implements InterruptibleEngine {
       durationMs: typeof resultEvent.duration_ms === "number" ? (resultEvent.duration_ms as number) : undefined,
       numTurns: typeof resultEvent.num_turns === "number" ? (resultEvent.num_turns as number) : undefined,
       ...(rateLimit ? { rateLimit } : {}),
+      ...(turns && turns.length > 0 ? { turns } : {}),
     };
   }
 
@@ -536,7 +599,12 @@ export class ClaudeEngine implements InterruptibleEngine {
     return this.buildEngineResultFromResultEvent(resultEvent, finalText, fallbackSessionId, rateLimitInfo);
   }
 
-  private extractResult(result: Record<string, unknown>, fallbackSessionId?: string, rateLimitInfo?: EngineRateLimitInfo): EngineResult {
+  private extractResult(
+    result: Record<string, unknown>,
+    fallbackSessionId?: string,
+    rateLimitInfo?: EngineRateLimitInfo,
+    turns?: string[],
+  ): EngineResult {
     const isError = result.is_error === true;
     const msg = String(result.result || "");
     const error = isError
@@ -550,6 +618,7 @@ export class ClaudeEngine implements InterruptibleEngine {
       cost: typeof result.total_cost_usd === "number" ? result.total_cost_usd : undefined,
       durationMs: typeof result.duration_ms === "number" ? result.duration_ms : undefined,
       numTurns: typeof result.num_turns === "number" ? result.num_turns : undefined,
+      ...(turns && turns.length > 0 ? { turns } : {}),
     };
   }
 

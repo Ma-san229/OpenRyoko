@@ -736,7 +736,19 @@ export class SessionManager {
         await connector.setTypingStatus(target.channel, threadTs, "").catch(() => {});
       }
       if (!wasInterrupted) {
-        await connector.replyMessage(target, responseText);
+        // Multi-turn sessions (driven by /goal) carry every intermediate
+        // turn in `result.turns`. Surface each as its own Slack reply so
+        // the user sees progress chronologically. The last entry contains
+        // the same text as `result.result`, so we send the array directly.
+        const turns = result.turns ?? [];
+        if (turns.length > 1) {
+          for (const turnText of turns) {
+            if (!turnText || !turnText.trim()) continue;
+            await connector.replyMessage(target, turnText);
+          }
+        } else {
+          await connector.replyMessage(target, responseText);
+        }
       }
       if (decorateMessages && capabilities.reactions) {
         await connector.removeReaction(target, "eyes").catch(() => {});

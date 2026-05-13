@@ -55,6 +55,14 @@ export interface EngineResult {
    * `resetsAt` is a Unix timestamp in seconds.
    */
   rateLimit?: EngineRateLimitInfo;
+  /**
+   * For sessions that span multiple assistant turns (e.g. when `/goal` keeps
+   * Claude working until a completion condition holds), each turn's final
+   * text in chronological order. `result` remains the LAST turn's text for
+   * backward compatibility; callers that want to surface progress should
+   * iterate `turns` instead.
+   */
+  turns?: string[];
 }
 
 export interface EngineRateLimitInfo {
