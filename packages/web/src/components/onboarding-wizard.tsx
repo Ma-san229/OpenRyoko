@@ -13,6 +13,10 @@ import {
   ArrowLeft,
   ArrowRight,
   Rocket,
+  Target,
+  LayoutGrid,
+  Ear,
+  Settings as SettingsIcon,
 } from "lucide-react"
 import { useSettings } from "@/app/settings-provider"
 import { useTheme } from "@/app/providers"
@@ -80,7 +84,28 @@ export function OnboardingWizard({ forceOpen, onClose }: OnboardingWizardProps) 
   const [localOperator, setLocalOperator] = useState("")
   const [localLanguage, setLocalLanguage] = useState(settings.language ?? "Japanese")
 
-  const TOTAL_STEPS = 4
+  const TOTAL_STEPS = 5
+
+  // Slack feature cards rendered on the Slack-awareness step. Awareness
+  // only — no actual tokens collected here; the wizard runs before the
+  // user has even set up a Slack App.
+  const SLACK_FEATURES = [
+    {
+      icon: Target,
+      title: "自然言語 /goal",
+      desc: "「最後までやって」等で自律完遂タスク。複数ターンの進捗が個別のSlackメッセージで届く",
+    },
+    {
+      icon: LayoutGrid,
+      title: "Agents View Canvas",
+      desc: "今動いている全Ryokoセッションをチャンネルの Canvas タブで一覧。30秒ごとに自動更新",
+    },
+    {
+      icon: Ear,
+      title: "空気読みトリアージ",
+      desc: "メンションされない限り基本沈黙。役立てる話題にだけ介入するから邪魔にならない",
+    },
+  ]
 
   // First-run detection — check server-side flag, not just localStorage
   useEffect(() => {
@@ -348,9 +373,71 @@ export function OnboardingWizard({ forceOpen, onClose }: OnboardingWizardProps) 
             </div>
           )}
 
-          {/* Step 3: Overview */}
+          {/* Step 3: Slack integration awareness */}
           {step === 3 && (
             <div key="step-3" className="animate-fade-in">
+              <h2 className="text-[length:var(--text-title1)] font-[var(--weight-bold)] tracking-[var(--tracking-tight)] text-[var(--text-primary)] mb-[var(--space-1)]">
+                Slackを繋げると…
+              </h2>
+              <p className="text-[length:var(--text-subheadline)] text-[var(--text-tertiary)] mb-[var(--space-4)]">
+                Ryoko の真価は Slack に住まわせたときに出ます。後で Settings →
+                Slack から有効化できます。
+              </p>
+
+              <div className="flex flex-col gap-[var(--space-2)] mb-[var(--space-4)]">
+                {SLACK_FEATURES.map((f) => {
+                  const Icon = f.icon
+                  return (
+                    <div
+                      key={f.title}
+                      className="flex items-start gap-[var(--space-3)] p-[var(--space-3)] rounded-[var(--radius-md)] bg-[var(--fill-quaternary)] border border-[var(--separator)]"
+                    >
+                      <div className="w-9 h-9 rounded-lg bg-[var(--accent-fill)] flex items-center justify-center shrink-0">
+                        <Icon size={18} className="text-[var(--accent)]" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-[length:var(--text-subheadline)] font-[var(--weight-semibold)] text-[var(--text-primary)]">
+                          {f.title}
+                        </div>
+                        <div className="text-[length:var(--text-caption1)] text-[var(--text-tertiary)] mt-0.5">
+                          {f.desc}
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  // Mark onboarding complete and jump straight to settings.
+                  api.completeOnboarding({
+                    portalName: localName || undefined,
+                    operatorName: localOperator || undefined,
+                    language: localLanguage || undefined,
+                  }).catch(() => {})
+                  if (!forceOpen) {
+                    localStorage.setItem("jinn-onboarded", "true")
+                  }
+                  setVisible(false)
+                  onClose?.()
+                  router.push("/settings")
+                }}
+                className="w-full px-[var(--space-4)] py-[var(--space-3)] rounded-[var(--radius-md)] bg-[var(--fill-tertiary)] hover:bg-[var(--fill-secondary)] border border-[var(--separator)] text-[var(--text-primary)] text-[length:var(--text-subheadline)] font-[var(--weight-medium)] cursor-pointer transition-colors inline-flex items-center justify-center gap-2"
+              >
+                <SettingsIcon size={16} />
+                今すぐ Settings で Slack を設定する
+              </button>
+              <p className="text-[length:var(--text-caption1)] text-[var(--text-tertiary)] text-center mt-[var(--space-2)]">
+                スキップして「次へ」を押すと、後で Settings から有効化できます。
+              </p>
+            </div>
+          )}
+
+          {/* Step 4: Overview */}
+          {step === 4 && (
+            <div key="step-4" className="animate-fade-in">
               <h2 className="text-[length:var(--text-title1)] font-[var(--weight-bold)] tracking-[var(--tracking-tight)] text-[var(--text-primary)] mb-[var(--space-1)]">
                 セットアップ完了！
               </h2>

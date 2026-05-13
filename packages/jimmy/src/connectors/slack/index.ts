@@ -13,6 +13,8 @@ import { formatResponse, downloadAttachment } from "./format.js";
 import { normalizeSpeakerInfo, type SpeakerInfo } from "./speaker.js";
 import { runTriage } from "./triage.js";
 import { ConversationTracker } from "./conversation-tracker.js";
+import { AgentsCanvasUpdater } from "./agents-canvas.js";
+import { extractGoalCondition, shouldExtractGoal } from "./goal-extractor.js";
 import type { SlackTriageConfig } from "../../shared/types.js";
 import { TMP_DIR } from "../../shared/paths.js";
 import { logger } from "../../shared/logger.js";
@@ -41,6 +43,7 @@ export class SlackConnector implements Connector {
   private readonly portalName: string | undefined;
   private readonly operatorName: string | undefined;
   private readonly conversations: ConversationTracker;
+  private readonly agentsCanvas: AgentsCanvasUpdater | null;
   private static CHANNEL_CACHE_TTL_MS = 3600_000; // 1 hour
   private static USER_CACHE_TTL_MS = 3600_000; // 1 hour
 
@@ -120,6 +123,9 @@ export class SlackConnector implements Connector {
     this.portalName = context.portalName;
     this.operatorName = context.operatorName;
     this.conversations = new ConversationTracker();
+    this.agentsCanvas = config.agentsCanvas?.enabled
+      ? new AgentsCanvasUpdater(this.app, config.agentsCanvas)
+      : null;
   }
 
   private async resolveSpeakerInfo(userId: string | undefined): Promise<SpeakerInfo | null> {
@@ -457,6 +463,35 @@ export class SlackConnector implements Connector {
       if (triageEnabled) {
         this.conversations.recordBotEngaged(conversationKey);
       }
+
+      // Natural-language `/goal` injection.
+      //
+      // This is intentionally OUTSIDE the triage path. Triage decides
+      // "should we even respond"; goal extraction decides "if we respond,
+      // should the session run autonomously until a condition holds".
+      // The two questions are independent — DM / @-mention / DM-equivalent
+      // messages skip triage but still benefit from /goal — so we apply
+      // the extractor here, at the single point every reply-bound message
+      // passes through.
+      //
+      // The earlier keyword-regex approach missed natural Japanese phrasings
+      // ("完了と書いたら止まる" without "最後までやって" etc.) so we now
+      // always defer to a Haiku call gated only by a cheap length check.
+      // Haiku returns null fast for non-goal messages; sanitisation in the
+      // parser blocks slash-prefix injection and sentinel placeholders.
+      if (shouldExtractGoal(msg.text)) {
+        try {
+          const condition = await extractGoalCondition(msg.text);
+          if (condition) {
+            logger.info(`[slack] /goal injected: ${condition.slice(0, 100)}`);
+            msg.text = `/goal ${condition}\n\n${msg.text}`;
+          }
+        } catch (err) {
+          // extractGoalCondition already catches its own errors; defensive.
+          logger.debug(`[slack] goal-extractor unexpected error: ${err}`);
+        }
+      }
+
       this.handler(msg);
     });
 
@@ -574,9 +609,11 @@ export class SlackConnector implements Connector {
     this.started = true;
     this.lastError = null;
     logger.info("Slack connector started (socket mode)");
+    this.agentsCanvas?.start();
   }
 
   async stop() {
+    this.agentsCanvas?.stop();
     for (const interval of this.typingIntervals.values()) {
       clearInterval(interval);
     }
@@ -596,6 +633,46 @@ export class SlackConnector implements Connector {
       detail: this.lastError ?? undefined,
       capabilities: this.capabilities,
     };
+  }
+
+  /**
+   * Enumerate channels the bot is a member of. Used by the settings UI to
+   * populate the Agents View canvas channel picker.
+   *
+   * Public channels and private groups the bot has been invited to are both
+   * included; DMs/MPIMs are filtered out (canvases live in channels, not
+   * direct messages).
+   */
+  async listChannels(): Promise<Array<{ id: string; name: string; isPrivate: boolean; isMember: boolean }>> {
+    const out: Array<{ id: string; name: string; isPrivate: boolean; isMember: boolean }> = [];
+    let cursor: string | undefined;
+    // Bound the loop so a misbehaving workspace can't make us iterate forever.
+    for (let page = 0; page < 20; page++) {
+      const res = await this.app.client.conversations.list({
+        types: "public_channel,private_channel",
+        exclude_archived: true,
+        limit: 200,
+        cursor,
+      });
+      const channels = (res.channels ?? []) as unknown as Array<Record<string, unknown>>;
+      for (const c of channels) {
+        const id = typeof c.id === "string" ? c.id : undefined;
+        const name = typeof c.name === "string" ? c.name : undefined;
+        if (!id || !name) continue;
+        // bot must be a member to post a canvas in the channel
+        if (c.is_member !== true) continue;
+        out.push({
+          id,
+          name,
+          isPrivate: c.is_private === true,
+          isMember: true,
+        });
+      }
+      cursor = res.response_metadata?.next_cursor || undefined;
+      if (!cursor) break;
+    }
+    out.sort((a, b) => a.name.localeCompare(b.name));
+    return out;
   }
 
   reconstructTarget(replyContext: ReplyContext): Target {

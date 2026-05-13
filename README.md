@@ -61,6 +61,8 @@ OpenRyokoは独自のプロンプトエンジニアリング層を持ちませ�
 
 - 🔌 **3エンジン対応** — Claude Code CLI + Codex SDK + Gemini CLI
 - 💬 **コネクタ** — Slack（スレッド・リアクション・空気読み）、WhatsApp、Discord、Telegram
+- 🎯 **自然言語 `/goal`** — 「最後までやって」「完成するまで止まらないで」等の Slack 発言を検出し、Claude Code v2.1.139+ の `/goal` Stop hookを自動起動。複数ターンの作業結果はそれぞれ独立した Slack メッセージとして届く
+- 🖼️ **Agents View Canvas** — 現在動いている全 Ryoko セッションを Slack の Canvas にライブ同期。チャンネルのタブから「いま何が走っているか」がひと目で分かる
 - 📎 **ファイル添付** — Web チャットにドラッグ&ドロップしたファイルをエンジンへパススルー
 - 📱 **モバイル対応** — サイドバー折りたたみ・モバイル向けダッシュボード
 - ⏰ **Cron スケジューリング** — ホットリロード対応のバックグラウンドジョブ
@@ -247,6 +249,68 @@ ExecStart）を必ず編集してください。
 ダッシュボードの Settings 画面で Slack トークン等を保存すると、`~/.ryoko/config.yaml`
 が更新されたあと自動でコネクタが再接続されます（v0.9.5 以降）。デーモン再起動は
 不要です。手動で再接続したい場合は `POST /api/connectors/reload` を叩けます。
+
+## 🎯 自然言語 `/goal` — 自律完遂タスク
+
+Claude Code v2.1.139+ で追加された `/goal` コマンドを、Slackの自然な日本語/英語から
+自動起動できます。
+
+例えば DM や @メンションで：
+
+> 5社の人事SaaSの料金/機能を比較した表をこのスレッドに投げて、**最後までやって**
+
+と頼むと、OpenRyoko は内部で Haiku を呼んで完了条件を一文に蒸留し、Claude Code への
+プロンプトに `/goal X` を前置します。Claude は `/goal` の Stop hook を立て、**条件が
+満たされるまで複数ターンに渡って自律的に作業**を続けます。各ターンの応答はそれぞれ
+独立した Slack メッセージとして投稿されるので、進捗が見える形で届きます。
+
+トリガーは決定論的なフレーズ（「最後まで」「止まらないで」「完成するまで」「終わったら
+教えて」「keep going」「until done」等）に加え、文中に **埋め込まれた停止条件**
+（「完了と書いたら止まる」「Xになるまで」「別々のターンで」等）にも反応します。
+意味判定は Haiku が行うので、対応フレーズを覚える必要はありません。
+
+> 💡 Claude Code は **v2.1.139 以降が必須** です（古いバージョンだと `/goal isn't available
+> in this environment` になります）。`npm install -g @anthropic-ai/claude-code@latest`
+> で最新化してください。
+
+## 🖼️ Agents View Canvas — Slack でいつでも状況把握
+
+設定で有効化すると、Ryoko は指定した Slack チャンネルに **「Ryoko Agents View」**
+というタブ付き Canvas を自動作成し、現在動いている全セッションを30秒ごとに更新
+します。Running / Waiting / Errored / Interrupted / Idle のグループに分かれて、
+チャンネル上部のタブから即座に「いま何が走っているか」が把握できます。
+
+### 有効化手順
+
+1. **Slack App に scope を追加** — Settings ページの「Slack App Manifest」ブロックを
+   コピーして自分の Slack App に貼り直し、Reinstall to Workspace を実行。これで
+   `canvases:write` / `canvases:read` を含む必要 scope がすべて揃います
+2. **Settings → Slack → Agents View Canvas** で：
+   - 「有効化」をON
+   - 「表示先チャンネル」のドロップダウンから対象チャンネル選択（Bot が member の
+     channel のみ表示されます）
+   - 必要に応じてタイトル・更新間隔・表示件数を調整
+3. 保存すると30秒以内に指定チャンネルに Canvas が出現します
+
+設定はホットリロード対応なので、デーモン再起動は不要です。
+
+## 🔒 セキュリティ運用上の注意
+
+OpenRyoko は **個人マシン or 信頼境界内の VPS で 1 人 / 1 チームが使う前提**で
+設計されています。本番運用する場合は以下を必ず守ってください：
+
+- **`gateway.host` はデフォルト `127.0.0.1` のままにする**。外部公開する場合は必ず
+  前段に **認証付きリバースプロキシ**（Tailscale Funnel + nginx basic auth、Cloudflare
+  Access、Caddy with mTLS 等）を置く。daemon 自体は API 認証を持たない。
+- **`connectors.slack.allowFrom` を必ず設定する**。空欄だとワークスペース全員が
+  Ryoko を駆動でき、`/goal` の自然言語起動と組み合わさると秘密情報の流出経路に
+  なり得る。trusted user の Slack ID をホワイトリストで明示すること。
+- **Slack Bot の権限はそのまま Ryoko の権限**。Bot に `chat:write` `files:read` 等が
+  付与されている以上、Slack の任意ユーザが promptインジェクション経由で Ryoko に
+  これらを使わせる可能性は理論上残る。`allowFrom` の絞り込みが第一防御線。
+- **Loopback Host header guard / 限定 CORS** を v2026.5.13 から有効化。`gateway.host`
+  が `127.0.0.1` の時は loopback origin 以外からの API 呼び出しを 421 で拒否する。
+  これにより DNS rebinding によるローカルブラウザ経由の attack をブロック。
 
 ## 🔗 Jinn からの移行
 

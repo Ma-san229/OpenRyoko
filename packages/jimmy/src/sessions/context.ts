@@ -113,7 +113,7 @@ export function buildContext(opts: {
     sections.push({
       tier: Tier.STANDARD,
       marker: "## Self-evolution",
-      content: buildEvolutionContext(portalName),
+      content: buildEvolutionContext(portalName, opts.config),
       summary: `## Self-evolution\nUpdate knowledge files in \`~/.jinn/knowledge/\` when you learn new info about the user or their projects.`,
     });
   }
@@ -702,12 +702,22 @@ function buildEnvironmentContext(): string | null {
   return lines.join("\n");
 }
 
-function buildEvolutionContext(portalName: string): string {
+function buildEvolutionContext(portalName: string, config?: JinnConfig): string {
   const profilePath = path.join(JINN_HOME, "knowledge", "user-profile.md");
   let profileContent = "";
   try { profileContent = fs.readFileSync(profilePath, "utf-8").trim(); } catch {}
 
   const isNew = profileContent.length < 50;
+
+  // Conversational discovery hint: a Slack workspace is wired up but the
+  // user hasn't enabled the Agents View canvas. Surface it in steady-state
+  // mode (not onboarding) so the assistant can proactively offer to help
+  // turn it on — without nagging on every turn.
+  const slackConnected = !!(
+    config?.connectors?.slack?.appToken && config.connectors?.slack?.botToken
+  );
+  const canvasEnabled = config?.connectors?.slack?.agentsCanvas?.enabled === true;
+  const canvasHintApplies = slackConnected && !canvasEnabled;
 
   const lines: string[] = [`## Self-evolution`];
 
@@ -720,6 +730,11 @@ function buildEvolutionContext(portalName: string): string {
     lines.push(`4. Any active projects ${portalName} should know about?`);
     lines.push(`\nAfter the user responds, write their answers to \`~/.jinn/knowledge/user-profile.md\` and \`~/.jinn/knowledge/preferences.md\`.`);
     lines.push(`Then proceed to help with their original request.`);
+    if (canvasHintApplies) {
+      lines.push(
+        `\nIf the conversation goes well and Slack is set up, you may also mention that you can mirror all your running sessions to a Slack canvas (the "Agents View Canvas") — but only once, briefly, and only if it feels natural.`,
+      );
+    }
   } else {
     lines.push(`You learn and evolve over time. When you discover new information about the user, their projects, or their preferences:`);
     lines.push(`- Update \`~/.jinn/knowledge/user-profile.md\` with business/identity info`);
@@ -727,6 +742,26 @@ function buildEvolutionContext(portalName: string): string {
     lines.push(`- Update \`~/.jinn/knowledge/projects.md\` with project details`);
     lines.push(`- If the user gives you persistent feedback (e.g. "always do X", "never do Y"), update \`~/.jinn/CLAUDE.md\``);
     lines.push(`\nDo this silently — don't announce every file update. Just evolve.`);
+    if (canvasHintApplies) {
+      lines.push(
+        `\n### Available feature the user hasn't enabled: Agents View Canvas`,
+      );
+      lines.push(
+        `Slack is connected but \`slack.agentsCanvas.enabled\` is off in config.yaml. The Agents View Canvas mirrors every running ${portalName} session to a Slack canvas — running / waiting / errored / idle, updated every 30 seconds.`,
+      );
+      lines.push(
+        `**Do NOT proactively pitch this on every turn.** Only suggest it when ALL of these hold:`,
+      );
+      lines.push(
+        `- The user just asked something that benefits from seeing live session state (e.g. "what is Ryoko doing right now?", "I want a dashboard of your work", "is there a way to see all the agents?")`,
+      );
+      lines.push(
+        `- OR the user just successfully connected Slack and is exploring what to do next.`,
+      );
+      lines.push(
+        `When you do bring it up, keep it to one sentence and point them to **Settings → Slack → Agents View Canvas** in the Web UI. The user can also delegate the toggling to you (Bash tool: \`curl -X PUT http://...:7777/api/config\`) if they ask.`,
+      );
+    }
   }
 
   return lines.join("\n");
