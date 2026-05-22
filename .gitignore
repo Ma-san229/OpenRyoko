@@ -5,6 +5,7 @@ dist/
 *.tsbuildinfo
 .env
 .env.local
+.serena/
 .worktrees/
 .DS_Store
 
