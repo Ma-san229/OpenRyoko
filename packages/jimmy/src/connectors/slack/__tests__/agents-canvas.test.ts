@@ -235,6 +235,69 @@ describe("AgentsCanvasUpdater", () => {
     expect(apiCall.mock.calls.filter(([method]) => method === "canvases.create")).toHaveLength(2);
     expect(apiCall.mock.calls.filter(([method]) => method === "canvases.edit")).toHaveLength(1);
   });
+
+  it("self-disables after 10 consecutive tick failures and stops calling Slack", async () => {
+    const apiCall = vi.fn(async (method: string) => {
+      if (method === "canvases.create") {
+        const err = new Error("canvas_tab_creation_failed");
+        (err as any).data = { error: "canvas_tab_creation_failed" };
+        throw err;
+      }
+      return {};
+    });
+    const updater = new AgentsCanvasUpdater(
+      { client: { apiCall } } as any,
+      { enabled: true, pollIntervalMs: 5_000 },
+    );
+
+    // 10 consecutive failures → the loop should give up and stop itself.
+    for (let i = 0; i < 10; i++) {
+      await (updater as any).tick();
+    }
+    expect((updater as any).stopped).toBe(true);
+    const createsAtDisable = apiCall.mock.calls.filter(([m]) => m === "canvases.create").length;
+    expect(createsAtDisable).toBe(10);
+
+    // Further ticks are no-ops — a self-disabled loop must not keep hitting Slack.
+    await (updater as any).tick();
+    await (updater as any).tick();
+    expect(apiCall.mock.calls.filter(([m]) => m === "canvases.create").length).toBe(createsAtDisable);
+  });
+
+  it("resets the failure counter after a successful tick", async () => {
+    let failCreate = true;
+    let n = 0;
+    const apiCall = vi.fn(async (method: string) => {
+      if (method === "canvases.create") {
+        if (failCreate) {
+          const err = new Error("canvas_tab_creation_failed");
+          (err as any).data = { error: "canvas_tab_creation_failed" };
+          throw err;
+        }
+        return { canvas_id: "F1" };
+      }
+      return {};
+    });
+    const updater = new AgentsCanvasUpdater(
+      { client: { apiCall } } as any,
+      { enabled: true, pollIntervalMs: 5_000 },
+    );
+    // Vary sessions every tick so the no-op short-circuit never fires.
+    vi.mocked(listSessions).mockImplementation(() => [
+      makeSession({ id: `s${n++}`, status: "running", title: `s${n}` }),
+    ]);
+
+    // 9 consecutive create failures — one short of the limit.
+    for (let i = 0; i < 9; i++) await (updater as any).tick();
+    expect((updater as any).consecutiveFailures).toBe(9);
+    expect((updater as any).stopped).toBe(false);
+
+    // A successful tick clears the counter, so a transient outage never trips the limit.
+    failCreate = false;
+    await (updater as any).tick();
+    expect((updater as any).consecutiveFailures).toBe(0);
+    expect((updater as any).stopped).toBe(false);
+  });
 });
 
 describe("renderCanvasMarkdown — user-controlled string defang", () => {
