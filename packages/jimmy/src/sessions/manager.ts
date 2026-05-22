@@ -37,6 +37,20 @@ export interface RouteOptions {
   title?: string;
 }
 
+/**
+ * Control slash commands handled by {@link SessionManager.handleCommand}.
+ * Connectors should treat a message that begins with one of these as a bare
+ * command and NOT wrap it with conversation context — handleCommand() matches
+ * them by exact string / prefix, so any preamble breaks the parsing.
+ */
+export const SLASH_COMMANDS = ["/new", "/status", "/model", "/doctor", "/cron"] as const;
+
+/** True when `text` begins with a control slash command (see {@link SLASH_COMMANDS}). */
+export function startsWithSlashCommand(text: string): boolean {
+  const t = text.trimStart();
+  return SLASH_COMMANDS.some((cmd) => t === cmd || t.startsWith(`${cmd} `));
+}
+
 function maybeRevertEngineOverride(session: Session): Session {
   const meta = (session.transportMeta || {}) as Record<string, unknown>;
   const override = meta["engineOverride"] as Record<string, unknown> | undefined;
