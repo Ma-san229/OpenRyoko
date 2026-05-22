@@ -46,6 +46,8 @@ import fs from "node:fs";
 const mockExecFileSync = vi.mocked(execFileSync);
 const mockExistsSync = vi.mocked(fs.existsSync);
 const mockReaddirSync = vi.mocked(fs.readdirSync);
+const mockWriteFileSync = vi.mocked(fs.writeFileSync);
+const mockRmSync = vi.mocked(fs.rmSync);
 
 describe("migrate: AI session launcher", () => {
   beforeEach(() => {
@@ -96,5 +98,20 @@ describe("migrate: AI session launcher", () => {
     const argsArray = args as string[];
 
     expect(argsArray).toContain("-p");
+  });
+
+  it("does not stamp the target version when auto migration skips existing files", async () => {
+    const { runMigrate } = await import("../migrate.js");
+    const fileEntry = {
+      name: "CLAUDE.md",
+      isDirectory: () => false,
+    };
+    mockReaddirSync.mockReturnValue([fileEntry] as any);
+
+    await runMigrate({ auto: true });
+
+    expect(mockExecFileSync).not.toHaveBeenCalled();
+    expect(mockWriteFileSync).not.toHaveBeenCalled();
+    expect(mockRmSync).not.toHaveBeenCalled();
   });
 });

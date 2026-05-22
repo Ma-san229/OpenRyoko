@@ -3,12 +3,25 @@ import path from "node:path";
 import yaml from "js-yaml";
 import { CONFIG_PATH, TEMPLATE_DIR } from "./paths.js";
 
+const DOTTED_NUMERIC_VERSION = /^\d+\.\d+\.\d+$/;
+
 /**
- * Compare two semver strings. Returns negative if a < b, 0 if equal, positive if a > b.
+ * Return true for migration/package versions represented as three numeric
+ * dot-separated segments. This accepts both historical semver-like versions
+ * (0.9.0) and OpenRyoko CalVer versions (2026.5.7).
+ */
+export function isDottedNumericVersion(v: string): boolean {
+  return DOTTED_NUMERIC_VERSION.test(v);
+}
+
+/**
+ * Compare two three-part numeric version strings. Returns negative if a < b,
+ * 0 if equal, positive if a > b. Supports both semver-like versions and
+ * OpenRyoko CalVer versions such as 2026.10.1.
  */
 export function compareSemver(a: string, b: string): number {
-  const pa = a.split(".").map(Number);
-  const pb = b.split(".").map(Number);
+  const pa = isDottedNumericVersion(a) ? a.split(".").map(Number) : [0, 0, 0];
+  const pb = isDottedNumericVersion(b) ? b.split(".").map(Number) : [0, 0, 0];
   for (let i = 0; i < 3; i++) {
     const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
     if (diff !== 0) return diff;
@@ -36,7 +49,7 @@ export function getInstanceVersion(): string {
 /**
  * List migration version directories shipped in the template that apply
  * between fromVersion (exclusive) and toVersion (inclusive).
- * Returns sorted ascending by semver.
+ * Returns sorted ascending by numeric dotted version order.
  */
 export function getPendingMigrations(fromVersion: string, toVersion: string): string[] {
   const migrationsDir = path.join(TEMPLATE_DIR, "migrations");
@@ -47,8 +60,10 @@ export function getPendingMigrations(fromVersion: string, toVersion: string): st
     .filter((e) => e.isDirectory())
     .map((e) => e.name)
     .filter((v) => {
-      // Only include valid semver-looking directories
-      if (!/^\d+\.\d+\.\d+$/.test(v)) return false;
+      // Only include valid migration version directories. OpenRyoko has
+      // historical semver-like migrations and current CalVer migrations; both
+      // intentionally use the same three-part numeric shape.
+      if (!isDottedNumericVersion(v)) return false;
       return compareSemver(v, fromVersion) > 0 && compareSemver(v, toVersion) <= 0;
     })
     .sort(compareSemver);

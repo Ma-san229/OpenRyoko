@@ -218,11 +218,15 @@ export async function startGateway(
             allowFrom: cfg.connectors.slack.allowFrom,
             ignoreOldMessagesOnBoot: cfg.connectors.slack.ignoreOldMessagesOnBoot,
             triage: cfg.connectors.slack.triage,
+            goalExtraction: cfg.connectors.slack.goalExtraction,
             agentsCanvas: cfg.connectors.slack.agentsCanvas,
           },
           {
             portalName: cfg.portal?.portalName,
             operatorName: cfg.portal?.operatorName,
+            goalInjectionEnabled: (cfg.connectors.slack.employee
+              ? employeeRegistry.get(cfg.connectors.slack.employee)?.engine
+              : cfg.engines.default) === "claude",
           },
         );
         slack.onMessage((msg) => {
@@ -394,6 +398,7 @@ export async function startGateway(
             const slack = new SlackConnector(slackConfig, {
               portalName: config.portal?.portalName,
               operatorName: config.portal?.operatorName,
+              goalInjectionEnabled: (employee ? employeeRegistry.get(employee)?.engine : config.engines.default) === "claude",
             });
             slack.onMessage((msg) => {
               const routeOpts: RouteOptions = {};
@@ -528,6 +533,7 @@ export async function startGateway(
               const slack = new SlackConnector(slackConfig, {
                 portalName: freshConfig.portal?.portalName,
                 operatorName: freshConfig.portal?.operatorName,
+                goalInjectionEnabled: (employee ? employeeRegistry.get(employee)?.engine : freshConfig.engines.default) === "claude",
               });
               slack.onMessage((msg) => {
                 const routeOpts: RouteOptions = {};

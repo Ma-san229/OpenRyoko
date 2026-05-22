@@ -2,6 +2,33 @@
 
 > **バージョン体系について**: 2026.4.26 から日付ベース (`YYYY.M.D`) のCalVerに移行しました。npm semver の制約上、月・日の leading zero は付けません (例: 4月26日 → `2026.4.26`)。
 
+## [2026.5.22] - 2026-05-22
+
+### Features
+- **Slack air-reading triage on Codex**: 空気読みトリアージの one-shot 判定を Claude だけでなく Codex でも実行できるようにしました。デフォルトは軽量な `codex` + `gpt-5-nano` です。
+- **Goal extraction controls**: Slack の自然言語 goal 判定を `connectors.slack.goalExtraction.enabled` でオン/オフ可能にしました。遅延が目立つためデフォルトはオフです。
+- **Web UI settings**: Settings 画面から Slack triage / goal extraction の engine、model、timeout、bin override を設定できるようにしました。
+
+### Fixes
+- **Slack threaded replies**: connector `/send` に `thread` がある場合は threaded reply として送信し、顧客向け返信がチャンネル直下に裸で投稿される事故を防ぎます。
+- **Current conversation duplicate guard**: gateway MCP の `send_message` が現在会話へ投稿しようとした場合は拒否し、最終回答で返すよう促します。実返信と内部ナレーションの二重投稿を防ぎます。
+- **Codex goal guard**: `/goal` は Claude 専用として扱い、Codex セッションでは実行しないようにしました。
+- **Agents View Canvas**: `canvases.edit` 失敗時に無条件で Canvas ID を破棄していた挙動を修正。Slack API の恒久的な edit エラーで次回 tick が新規 Canvas 作成に戻り、Canvas が増殖する問題を防ぎます。Canvas が削除済み/見つからない場合だけ再作成します。
+- **Migration auto mode**: `ryoko migrate --auto` が既存ファイルを skip した場合、version stamp と cleanup を行わないようにしました。未マージの重要テンプレートがあるのに最新版扱いになる問題を防ぎます。
+- **Migration CLI copy**: `ryoko migrate` の表示と migrate skill の説明に残っていた `.jinn` / `jinn migrate` 表記を `.ryoko` / `ryoko migrate` に更新。
+- **Version migration ordering**: `2026.5.7` のような OpenRyoko CalVer migration を、歴史的な `0.x.y` migration と同じ3セグメント数値版として正しく比較・ソートします。
+- **Cost tests isolation**: gateway cost tests が実ユーザーの runtime DB を触らないよう、テスト用 DB に隔離しました。
+
+### Improvements
+- **2026.5.7 migration payload**: persona / memory layer の新規・更新テンプレートを migration `files/` 配下にも同梱し、AI migration がコピーまたはマージしやすい形にしました。
+
+### Tests
+- jimmy: 28 files / 347 tests pass。
+- web: typecheck pass。
+- Agents View Canvas の edit 失敗時に Canvas を重複作成しない回帰テストを追加。
+- CalVer migration ordering の unit test を追加。
+- Slack triage / goal extraction の Codex one-shot 実行と、goal extraction デフォルトオフの回帰テストを追加。
+
 ## [2026.4.30] - 2026-04-30
 
 ### 🐛 Fixes

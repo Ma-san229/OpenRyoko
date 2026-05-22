@@ -4,7 +4,9 @@ import {
   hasGoalIntent,
   buildGoalExtractionPrompt,
   parseGoalExtractionResult,
+  extractGoalCondition,
 } from "../goal-extractor.js";
+import { EventEmitter } from "node:events";
 
 describe("shouldExtractGoal — accepts substantive messages", () => {
   it.each([
@@ -42,6 +44,47 @@ describe("hasGoalIntent (deprecated alias)", () => {
     expect(hasGoalIntent("a substantive request")).toBe(true);
     expect(hasGoalIntent("ok")).toBe(false);
     expect(hasGoalIntent("")).toBe(false);
+  });
+});
+
+describe("extractGoalCondition", () => {
+  it("is disabled by default", async () => {
+    const spawnImpl = (() => {
+      throw new Error("should not spawn");
+    }) as any;
+    await expect(extractGoalCondition("最後までやって", { spawnImpl })).resolves.toBeNull();
+  });
+
+  it("can use Codex for extraction while still returning a /goal condition", async () => {
+    let spawnedArgs: string[] = [];
+    const spawnImpl = ((_bin: string, args: string[]) => {
+      spawnedArgs = args;
+      const proc = new EventEmitter() as any;
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      proc.kill = () => {};
+      setImmediate(() => {
+        proc.stdout.emit("data", Buffer.from(JSON.stringify({
+          type: "item.completed",
+          item: {
+            type: "agent_message",
+            text: '{"condition":"All requested work is complete"}',
+          },
+        })));
+        proc.emit("close", 0);
+      });
+      return proc;
+    }) as any;
+
+    await expect(extractGoalCondition("OpenRyokoのGithub調査して紹介資料作成まで最後までやって", {
+      enabled: true,
+      engine: "codex",
+      model: "gpt-5-nano",
+      spawnImpl,
+    })).resolves.toBe("All requested work is complete");
+    expect(spawnedArgs).toContain("exec");
+    expect(spawnedArgs).toContain("--json");
+    expect(spawnedArgs).toContain("gpt-5-nano");
   });
 });
 

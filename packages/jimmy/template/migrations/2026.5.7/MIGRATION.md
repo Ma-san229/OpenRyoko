@@ -10,7 +10,7 @@ OpenClaw 由来の **persona / memory レイヤ**を導入。エージェント�
 
 ## Template files changed
 
-### 新規ファイル（`ryoko setup` 再実行で自動配置）
+### 新規ファイル（`ryoko setup` 再実行、または `files/` からコピー）
 
 | ファイル | 用途 |
 |---|---|
@@ -23,6 +23,8 @@ OpenClaw 由来の **persona / memory レイヤ**を導入。エージェント�
 
 これらは新規ファイルなので**衝突なし**。`ryoko setup` を再実行すれば自動配置される（[setup.ts:424-457](../../src/cli/setup.ts#L424-L457) の persona ロジックが既存ユーザーも brand-new 同等に扱い、BOOTSTRAP.md も配置する）。
 
+この migration には同じ内容を `files/` 配下にも同梱しているため、AI migration では `~/.ryoko/migrations/2026.5.7/files/<path>` から `~/.ryoko/<path>` へコピーしてもよい。
+
 ### 更新ファイル（既存ファイルなので `ryoko setup` ではマージされない）
 
 | ファイル | 何が変わったか |
@@ -31,6 +33,8 @@ OpenClaw 由来の **persona / memory レイヤ**を導入。エージェント�
 | `AGENTS.md` | CLAUDE.md と同じ構造変更、ただし `@`-import の代わりに Codex 向け Read 指示 |
 | `skills/onboarding/SKILL.md` | Step 0（既存 knowledge 確認）追加。Step 3 を IDENTITY/SOUL/MEMORY 書き込みに変更。`.jinn` パス → `.ryoko`。Step 7 で BOOTSTRAP.md 削除を必須化 |
 | `skills/migrate/SKILL.md` | 全てのパス `~/.jinn/` → `~/.ryoko/`、製品名 `Jinn` → `OpenRyoko`、コマンド `jinn migrate` → `ryoko migrate`（config key の `jinn.version` だけは互換性のため据え置き） |
+
+更新ファイルの最新版テンプレートも `files/` 配下に同梱している。既存ファイルは無条件上書きせず、以下の merge instructions に従って追記または置換判断すること。
 
 ## Version bump
 

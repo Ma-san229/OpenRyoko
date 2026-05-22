@@ -12,8 +12,10 @@ function makeFakeSpawn(scenario: {
   exitCode?: number;
   error?: Error;
   hangForever?: boolean;
+  onSpawn?: (bin: string, args: string[]) => void;
 }) {
-  return () => {
+  return (bin: string, args: string[]) => {
+    scenario.onSpawn?.(bin, args);
     const proc = new EventEmitter() as any;
     proc.stdout = new EventEmitter();
     proc.stderr = new EventEmitter();
@@ -96,5 +98,31 @@ describe("runTriage", () => {
       spawnImpl: makeFakeSpawn({ hangForever: true }) as any,
     });
     expect(decision).toEqual({ action: "reply", reason: "triage_error" });
+  });
+
+  it("can run through Codex with a lightweight model", async () => {
+    let spawnedArgs: string[] = [];
+    const codexJsonl = JSON.stringify({
+      type: "item.completed",
+      item: {
+        type: "agent_message",
+        text: '{"action":"silent","reason":"ambient"}',
+      },
+    });
+    const decision = await runTriage(baseInput, {
+      engine: "codex",
+      model: "gpt-5-nano",
+      spawnImpl: makeFakeSpawn({
+        stdout: codexJsonl,
+        onSpawn: (_bin, args) => {
+          spawnedArgs = args;
+        },
+      }) as any,
+    });
+
+    expect(spawnedArgs).toContain("exec");
+    expect(spawnedArgs).toContain("--json");
+    expect(spawnedArgs).toContain("gpt-5-nano");
+    expect(decision).toEqual({ action: "silent", reason: "ambient" });
   });
 });

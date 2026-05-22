@@ -12,8 +12,9 @@
  *
  *   1. `hasGoalIntent` — deterministic keyword gate. Burns no LLM credits.
  *      Catches the common JP / EN "keep going until done" phrasings.
- *   2. `extractGoalCondition` — only fires when (1) matches. Spawns Haiku
- *      via the Claude Code CLI with a tight prompt and a hard timeout.
+ *   2. `extractGoalCondition` — only fires when (1) matches and the feature
+ *      is enabled. Spawns a lightweight CLI model with a tight prompt and a
+ *      hard timeout.
  *      On any failure (timeout, unparseable output, slash-prefix rejection)
  *      it returns `null` and the caller pretends nothing happened.
  *
@@ -23,8 +24,7 @@
 
 import { spawn } from "node:child_process";
 import { logger } from "../../shared/logger.js";
-import { resolveBin, formatSpawnError } from "../../shared/resolveBin.js";
-import { buildChildEnv } from "../../shared/childEnv.js";
+import { defaultBinForEngine, defaultModelForEngine, invokeOneShot, type OneShotEngine } from "../../shared/oneShotCli.js";
 
 // ---------------------------------------------------------------------------
 // Cheap pre-gate
@@ -214,9 +214,13 @@ export function parseGoalExtractionResult(raw: string): string | null {
 // ---------------------------------------------------------------------------
 
 export interface ExtractGoalOptions {
-  /** Binary to invoke — defaults to "claude" */
+  /** Enable goal extraction. Defaults to false because it adds noticeable latency. */
+  enabled?: boolean;
+  /** CLI engine used only for deciding whether to inject /goal. Defaults to codex. */
+  engine?: OneShotEngine;
+  /** Binary to invoke — defaults to the selected engine's CLI. */
   bin?: string;
-  /** Model to call — defaults to claude-haiku-4-5 */
+  /** Model to call — defaults to gpt-5-nano for Codex or claude-haiku-4-5 for Claude. */
   model?: string;
   /** Hard timeout before giving up (ms). Defaults to 15s. */
   timeoutMs?: number;
@@ -229,8 +233,6 @@ export interface ExtractGoalOptions {
 // 30s matches triage's headroom while keeping the user-perceived added
 // latency bounded.
 const DEFAULT_TIMEOUT_MS = 30_000;
-const DEFAULT_MODEL = "claude-haiku-4-5";
-const DEFAULT_BIN = "claude";
 
 /**
  * Extract a `/goal` condition from a user's message. Returns null on any
@@ -241,99 +243,21 @@ export async function extractGoalCondition(
   messageText: string,
   options: ExtractGoalOptions = {},
 ): Promise<string | null> {
+  if (options.enabled !== true) return null;
   if (!shouldExtractGoal(messageText)) return null;
 
-  const bin = options.bin || DEFAULT_BIN;
-  const model = options.model || DEFAULT_MODEL;
+  const engine = options.engine ?? "codex";
+  const bin = options.bin || defaultBinForEngine(engine);
+  const model = options.model || defaultModelForEngine(engine);
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const spawnFn = options.spawnImpl || spawn;
   const prompt = buildGoalExtractionPrompt(messageText);
 
   try {
-    const output = await invokeClaude(prompt, { bin, model, timeoutMs, spawnFn });
+    const output = await invokeOneShot(prompt, { engine, bin, model, timeoutMs, spawnFn, label: "goal-extractor" });
     return parseGoalExtractionResult(output);
   } catch (err) {
     logger.warn(`[goal-extractor] extraction failed, skipping /goal: ${err}`);
     return null;
   }
-}
-
-interface InvokeOptions {
-  bin: string;
-  model: string;
-  timeoutMs: number;
-  spawnFn: typeof spawn;
-}
-
-function invokeClaude(prompt: string, opts: InvokeOptions): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const args = [
-      "-p",
-      "--output-format",
-      "json",
-      "--model",
-      opts.model,
-      "--dangerously-skip-permissions",
-      prompt,
-    ];
-    const resolvedBin = resolveBin(opts.bin);
-    const proc = opts.spawnFn(resolvedBin, args, {
-      stdio: ["ignore", "pipe", "pipe"],
-      env: buildChildEnv(),
-    });
-
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      try {
-        proc.kill("SIGTERM");
-      } catch {
-        /* ignore */
-      }
-      reject(new Error(`goal-extractor timed out after ${opts.timeoutMs}ms`));
-    }, opts.timeoutMs);
-
-    proc.stdout?.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
-    });
-    proc.stderr?.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf8");
-    });
-
-    proc.on("error", (err) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      reject(new Error(formatSpawnError("goal-extractor CLI", opts.bin, err)));
-    });
-
-    proc.on("close", (code) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (code !== 0) {
-        reject(new Error(`claude exited ${code}: ${stderr.slice(0, 500)}`));
-        return;
-      }
-      resolve(extractClaudeResult(stdout));
-    });
-  });
-}
-
-function extractClaudeResult(stdout: string): string {
-  const trimmed = stdout.trim();
-  if (!trimmed) return "";
-  try {
-    const parsed = JSON.parse(trimmed);
-    if (parsed && typeof parsed === "object" && typeof parsed.result === "string") {
-      return parsed.result;
-    }
-  } catch {
-    /* fall through */
-  }
-  return trimmed;
 }

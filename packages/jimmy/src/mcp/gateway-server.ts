@@ -11,6 +11,7 @@
  */
 
 import { createInterface } from "node:readline";
+import { currentConversationFromEnv, isSendToCurrentConversation } from "./current-conversation.js";
 
 const GATEWAY_URL = process.env.JINN_GATEWAY_URL || "http://127.0.0.1:7777";
 
@@ -35,7 +36,7 @@ interface JsonRpcResponse {
 const TOOLS = [
   {
     name: "send_message",
-    description: "Send a message to a Slack channel or other connector. Use this to proactively communicate with the user or post to specific channels.",
+    description: "Send a proactive message to a Slack channel or other connector. Do not use this to reply to the current conversation; return your final answer instead.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -223,6 +224,11 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
   switch (name) {
     case "send_message": {
       const connector = (args.connector as string) || "slack";
+      if (isSendToCurrentConversation({ ...args, connector }, currentConversationFromEnv())) {
+        throw new Error(
+          "send_message cannot post to the current conversation. Return the reply as your final answer instead; Jinn will deliver it to the correct thread.",
+        );
+      }
       const result = await apiPost(`/api/connectors/${connector}/send`, {
         channel: args.channel,
         text: args.text,

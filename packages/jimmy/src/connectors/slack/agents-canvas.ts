@@ -303,8 +303,10 @@ export class AgentsCanvasUpdater {
       if (markdown === this.lastMarkdown) return;
       // stop() may have fired while we were rendering — bail before any I/O.
       if (this.stopped) return;
-      await this.publish(markdown);
-      this.lastMarkdown = markdown;
+      const published = await this.publish(markdown);
+      if (published) {
+        this.lastMarkdown = markdown;
+      }
     } catch (err) {
       logger.warn(`[agents-canvas] tick failed: ${err}`);
     } finally {
@@ -312,19 +314,25 @@ export class AgentsCanvasUpdater {
     }
   }
 
-  private async publish(markdown: string): Promise<void> {
+  private async publish(markdown: string): Promise<boolean> {
     if (!this.canvasId) {
       await this.createCanvas(markdown);
-      return;
+      return true;
     }
     try {
       await this.editCanvas(this.canvasId, markdown);
+      return true;
     } catch (err) {
-      logger.warn(`[agents-canvas] edit failed, will try recreating: ${err}`);
-      // The persisted canvas may have been deleted by the user; drop the ID
-      // and let the next tick re-create it.
-      this.canvasId = null;
-      saveState({ canvasId: undefined, channelId: this.config.channelId });
+      if (isCanvasNotFoundError(err)) {
+        logger.warn(`[agents-canvas] edit target is gone, will try recreating: ${err}`);
+        // The persisted canvas may have been deleted by the user; drop the ID
+        // and let the next tick re-create it.
+        this.canvasId = null;
+        saveState({ canvasId: undefined, channelId: this.config.channelId });
+      } else {
+        logger.warn(`[agents-canvas] edit failed, keeping existing canvas id to avoid duplicate canvases: ${err}`);
+      }
+      return false;
     }
   }
 
@@ -415,4 +423,13 @@ function isChannelCanvasAlreadyExistsError(err: unknown): boolean {
   if (data?.error === "channel_canvas_already_exists") return true;
   const msg = err instanceof Error ? err.message : String(err);
   return /channel_canvas_already_exists/.test(msg);
+}
+
+function isCanvasNotFoundError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const data = (err as { data?: { error?: string } }).data;
+  const code = data?.error;
+  if (code && /(?:not_found|notfound|missing|deleted)/i.test(code)) return true;
+  const msg = err instanceof Error ? err.message : String(err);
+  return /(?:canvas|file).*(?:not_found|not found|missing|deleted)|(?:not_found|not found|missing|deleted).*(?:canvas|file)/i.test(msg);
 }

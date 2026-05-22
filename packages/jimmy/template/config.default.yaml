@@ -25,9 +25,18 @@ connectors:
     # silent/react/replyを判定し、不要な反応を抑制する。
     # triage:
     #   enabled: true
-    #   model: claude-haiku-4-5
+    #   engine: codex        # claude | codex
+    #   model: gpt-5-nano    # 軽量モデル推奨
     #   timeoutMs: 20000
     #   threadContextLimit: 10
+    #
+    # 自然言語の「最後までやって」を /goal に変換する判定。
+    # 遅いためデフォルトはオフ。/goal 実行自体は Claude セッション専用。
+    # goalExtraction:
+    #   enabled: false
+    #   engine: codex
+    #   model: gpt-5-nano
+    #   timeoutMs: 30000
 
 # MCPサーバーは従業員にブラウザ・検索・メッセージング機能を提供する。
 # Claude Codeセッションに --mcp-config 経由で自動注入される。

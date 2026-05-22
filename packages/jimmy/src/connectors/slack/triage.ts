@@ -11,8 +11,12 @@
 
 import { spawn } from "node:child_process";
 import { logger } from "../../shared/logger.js";
-import { resolveBin, formatSpawnError } from "../../shared/resolveBin.js";
-import { buildChildEnv } from "../../shared/childEnv.js";
+import {
+  defaultBinForEngine,
+  defaultModelForEngine,
+  invokeOneShot,
+  type OneShotEngine,
+} from "../../shared/oneShotCli.js";
 import {
   buildTriagePrompt,
   parseTriageDecision,
@@ -21,9 +25,11 @@ import {
 } from "./triage-prompt.js";
 
 export interface TriageRunnerOptions {
-  /** Binary to invoke — defaults to "claude" */
+  /** CLI engine to use for triage. Defaults to "codex"; "claude" is supported. */
+  engine?: OneShotEngine;
+  /** Binary to invoke — defaults to the selected engine's CLI. */
   bin?: string;
-  /** Model to use for the triage call (e.g. "claude-haiku-4-5") */
+  /** Model to use for the triage call (e.g. "claude-haiku-4-5" or "gpt-5-nano") */
   model?: string;
   /** Soft timeout before we fall back to the fail-open action */
   timeoutMs?: number;
@@ -42,13 +48,11 @@ export interface TriageRunnerOptions {
   failOpenAction?: "reply" | "silent";
 }
 
-// Triage spawns the Claude CLI which has a 3–5s startup overhead before it
+// Triage spawns a CLI which has a 3–5s startup overhead before it
 // even hits the API; combined with Haiku latency variance, an 8s budget was
 // causing routine timeouts in production. 30s gives headroom for slow days
 // while still being short enough that the user notices triage isn't free.
 const DEFAULT_TIMEOUT_MS = 30000;
-const DEFAULT_MODEL = "claude-haiku-4-5";
-const DEFAULT_BIN = "claude";
 
 /**
  * Run a triage decision. Never throws — on error returns a fail-open fallback
@@ -61,18 +65,21 @@ export async function runTriage(
   options: TriageRunnerOptions = {},
 ): Promise<TriageDecision> {
   const prompt = buildTriagePrompt(input);
-  const bin = options.bin || DEFAULT_BIN;
-  const model = options.model || DEFAULT_MODEL;
+  const engine = options.engine ?? "codex";
+  const bin = options.bin || defaultBinForEngine(engine);
+  const model = options.model || defaultModelForEngine(engine);
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const spawnFn = options.spawnImpl || spawn;
   const failOpenAction = options.failOpenAction ?? "reply";
 
   try {
-    const output = await invokeClaudeOneShot(prompt, {
+    const output = await invokeOneShot(prompt, {
+      engine,
       bin,
       model,
       timeoutMs,
       spawnFn,
+      label: "triage",
     });
     const decision = parseTriageDecision(output);
     if (!decision) {
@@ -84,86 +91,4 @@ export async function runTriage(
     logger.warn(`[triage] execution failed, defaulting to ${failOpenAction.toUpperCase()} (fail-open): ${err}`);
     return { action: failOpenAction, reason: "triage_error" };
   }
-}
-
-interface InvokeOptions {
-  bin: string;
-  model: string;
-  timeoutMs: number;
-  spawnFn: typeof spawn;
-}
-
-async function invokeClaudeOneShot(prompt: string, opts: InvokeOptions): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const args = [
-      "-p",
-      "--output-format",
-      "json",
-      "--model",
-      opts.model,
-      "--dangerously-skip-permissions",
-      prompt,
-    ];
-
-    const resolvedBin = resolveBin(opts.bin);
-    const proc = opts.spawnFn(resolvedBin, args, {
-      stdio: ["ignore", "pipe", "pipe"],
-      env: buildChildEnv(),
-    });
-
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      try {
-        proc.kill("SIGTERM");
-      } catch { /* ignore */ }
-      reject(new Error(`triage timed out after ${opts.timeoutMs}ms`));
-    }, opts.timeoutMs);
-
-    proc.stdout?.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
-    });
-    proc.stderr?.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf8");
-    });
-
-    proc.on("error", (err) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      reject(new Error(formatSpawnError("triage CLI", opts.bin, err)));
-    });
-
-    proc.on("close", (code) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (code !== 0) {
-        reject(new Error(`claude exited ${code}: ${stderr.slice(0, 500)}`));
-        return;
-      }
-      resolve(extractClaudeResult(stdout));
-    });
-  });
-}
-
-/**
- * Claude Code's `--output-format json` wraps the model's response in an
- * envelope like `{ "type": "result", "result": "...", ... }`. Strip that
- * if present; otherwise return the raw stdout unchanged.
- */
-function extractClaudeResult(stdout: string): string {
-  const trimmed = stdout.trim();
-  if (!trimmed) return "";
-  try {
-    const parsed = JSON.parse(trimmed);
-    if (parsed && typeof parsed === "object" && typeof parsed.result === "string") {
-      return parsed.result;
-    }
-  } catch { /* fall through */ }
-  return trimmed;
 }

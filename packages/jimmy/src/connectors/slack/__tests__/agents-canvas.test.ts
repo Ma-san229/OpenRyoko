@@ -1,6 +1,25 @@
-import { describe, it, expect } from "vitest";
-import { renderCanvasMarkdown } from "../agents-canvas.js";
+import fs from "node:fs";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
+import { listSessions } from "../../../sessions/registry.js";
+import { AgentsCanvasUpdater, renderCanvasMarkdown } from "../agents-canvas.js";
 import type { Session } from "../../../shared/types.js";
+
+vi.mock("../../../sessions/registry.js", () => ({
+  listSessions: vi.fn(() => []),
+}));
+
+vi.mock("../../../shared/paths.js", () => ({
+  JINN_HOME: "/tmp/openryoko-agents-canvas-test",
+}));
+
+vi.mock("../../../shared/logger.js", () => ({
+  logger: {
+    debug: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+  },
+}));
 
 function makeSession(overrides: Partial<Session> = {}): Session {
   return {
@@ -30,6 +49,17 @@ function makeSession(overrides: Partial<Session> = {}): Session {
 }
 
 const FIXED_NOW = Date.parse("2026-05-13T01:30:00.000Z");
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.useFakeTimers();
+  vi.setSystemTime(FIXED_NOW);
+  fs.rmSync("/tmp/openryoko-agents-canvas-test", { recursive: true, force: true });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("renderCanvasMarkdown", () => {
   it("renders a placeholder when there are no sessions", () => {
@@ -136,6 +166,74 @@ describe("renderCanvasMarkdown", () => {
       { nowMs: FIXED_NOW },
     );
     expect(md).toContain("**with-meta** _(slack · @ryoko)_");
+  });
+});
+
+describe("AgentsCanvasUpdater", () => {
+  it("keeps the current canvas id on non-recoverable edit failures instead of creating duplicates", async () => {
+    const apiCall = vi.fn(async (method: string) => {
+      if (method === "canvases.create") return { canvas_id: "F123" };
+      if (method === "canvases.edit") {
+        const err = new Error("invalid_arguments");
+        (err as any).data = { error: "invalid_arguments" };
+        throw err;
+      }
+      return {};
+    });
+    const updater = new AgentsCanvasUpdater(
+      { client: { apiCall } } as any,
+      { enabled: true, pollIntervalMs: 5_000 },
+    );
+    const mockedListSessions = vi.mocked(listSessions);
+
+    mockedListSessions.mockReturnValueOnce([]);
+    await (updater as any).tick();
+
+    mockedListSessions.mockReturnValueOnce([
+      makeSession({ id: "changed", status: "running", title: "changed" }),
+    ]);
+    await (updater as any).tick();
+
+    mockedListSessions.mockReturnValueOnce([
+      makeSession({ id: "changed-again", status: "running", title: "changed again" }),
+    ]);
+    await (updater as any).tick();
+
+    expect(apiCall.mock.calls.filter(([method]) => method === "canvases.create")).toHaveLength(1);
+    expect(apiCall.mock.calls.filter(([method]) => method === "canvases.edit")).toHaveLength(2);
+  });
+
+  it("recreates on the next tick when Slack reports the canvas is missing", async () => {
+    const apiCall = vi.fn(async (method: string) => {
+      if (method === "canvases.create") return { canvas_id: `F${apiCall.mock.calls.length}` };
+      if (method === "canvases.edit") {
+        const err = new Error("canvas_not_found");
+        (err as any).data = { error: "canvas_not_found" };
+        throw err;
+      }
+      return {};
+    });
+    const updater = new AgentsCanvasUpdater(
+      { client: { apiCall } } as any,
+      { enabled: true, pollIntervalMs: 5_000 },
+    );
+    const mockedListSessions = vi.mocked(listSessions);
+
+    mockedListSessions.mockReturnValueOnce([]);
+    await (updater as any).tick();
+
+    mockedListSessions.mockReturnValueOnce([
+      makeSession({ id: "changed", status: "running", title: "changed" }),
+    ]);
+    await (updater as any).tick();
+
+    mockedListSessions.mockReturnValueOnce([
+      makeSession({ id: "changed-again", status: "running", title: "changed again" }),
+    ]);
+    await (updater as any).tick();
+
+    expect(apiCall.mock.calls.filter(([method]) => method === "canvases.create")).toHaveLength(2);
+    expect(apiCall.mock.calls.filter(([method]) => method === "canvases.edit")).toHaveLength(1);
   });
 });
 

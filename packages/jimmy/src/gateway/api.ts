@@ -1554,10 +1554,13 @@ Handle this as a priority request from a colleague.`;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const body = _parsed.body as any;
       if (!body.channel || !body.text) return badRequest(res, "channel and text are required");
-      await connector.sendMessage(
-        { channel: body.channel, thread: body.thread },
-        body.text,
-      );
+      const hasThread = typeof body.thread === "string" && body.thread.trim().length > 0;
+      const target = { channel: body.channel, thread: body.thread };
+      if (hasThread) {
+        await connector.replyMessage(target, body.text);
+      } else {
+        await connector.sendMessage(target, body.text);
+      }
       return json(res, { status: "sent" });
     }
 

@@ -231,6 +231,13 @@ export class SessionManager {
       await connector.replyMessage(target, `Error: engine "${session.engine}" not available.`);
       return;
     }
+    if (session.engine !== "claude" && /^\/goal(?:\s|$)/i.test(msg.text.trim())) {
+      await connector.replyMessage(
+        target,
+        `/goal is only supported by the Claude engine. Current engine: ${session.engine}. Switch this session to Claude to use goal-mode execution.`,
+      );
+      return;
+    }
 
     insertMessage(session.id, "user", msg.text);
 
@@ -293,7 +300,11 @@ export class SessionManager {
           ? this.config.engines.gemini ?? this.config.engines.claude
           : this.config.engines.claude;
       if (session.engine === "claude") {
-        const mcpConfig = resolveMcpServers(this.config.mcp, employee);
+        const mcpConfig = resolveMcpServers(this.config.mcp, employee, {
+          connector: connector.name,
+          channel: target.channel,
+          thread: target.thread || target.messageTs,
+        });
         if (Object.keys(mcpConfig.mcpServers).length > 0) {
           mcpConfigPath = writeMcpConfigFile(mcpConfig, session.id);
         }

@@ -7,6 +7,7 @@ import type {
   ReplyContext,
   SlackConnectorConfig,
   Target,
+  SlackGoalExtractionConfig,
 } from "../../shared/types.js";
 import { buildReplyContext, deriveSessionKey, isOldSlackMessage } from "./threads.js";
 import { formatResponse, downloadAttachment } from "./format.js";
@@ -24,6 +25,8 @@ export interface SlackConnectorContext {
   portalName?: string;
   /** Configured operator name — used to identify operator vs third party */
   operatorName?: string;
+  /** Whether this connector's routed sessions can consume Claude-only /goal prompts. */
+  goalInjectionEnabled?: boolean;
 }
 
 export class SlackConnector implements Connector {
@@ -40,8 +43,10 @@ export class SlackConnector implements Connector {
   private botUserId: string | null = null;
   private typingIntervals = new Map<string, ReturnType<typeof setInterval>>();
   private readonly triageConfig: SlackTriageConfig | undefined;
+  private readonly goalExtractionConfig: SlackGoalExtractionConfig | undefined;
   private readonly portalName: string | undefined;
   private readonly operatorName: string | undefined;
+  private readonly goalInjectionEnabled: boolean;
   private readonly conversations: ConversationTracker;
   private readonly agentsCanvas: AgentsCanvasUpdater | null;
   private static CHANNEL_CACHE_TTL_MS = 3600_000; // 1 hour
@@ -120,8 +125,10 @@ export class SlackConnector implements Connector {
         : [];
     this.allowedUsers = allowFrom.length > 0 ? new Set(allowFrom) : null;
     this.triageConfig = config.triage;
+    this.goalExtractionConfig = config.goalExtraction;
     this.portalName = context.portalName;
     this.operatorName = context.operatorName;
+    this.goalInjectionEnabled = context.goalInjectionEnabled === true;
     this.conversations = new ConversationTracker();
     this.agentsCanvas = config.agentsCanvas?.enabled
       ? new AgentsCanvasUpdater(this.app, config.agentsCanvas)
@@ -200,6 +207,7 @@ export class SlackConnector implements Connector {
       },
       {
         bin: this.triageConfig?.bin,
+        engine: this.triageConfig?.engine,
         model: this.triageConfig?.model,
         timeoutMs: this.triageConfig?.timeoutMs,
         // Triage only runs for ambient messages (not DM, not @-mention, not
@@ -479,9 +487,9 @@ export class SlackConnector implements Connector {
       // always defer to a Haiku call gated only by a cheap length check.
       // Haiku returns null fast for non-goal messages; sanitisation in the
       // parser blocks slash-prefix injection and sentinel placeholders.
-      if (shouldExtractGoal(msg.text)) {
+      if (this.goalInjectionEnabled && this.goalExtractionConfig?.enabled === true && shouldExtractGoal(msg.text)) {
         try {
-          const condition = await extractGoalCondition(msg.text);
+          const condition = await extractGoalCondition(msg.text, this.goalExtractionConfig);
           if (condition) {
             logger.info(`[slack] /goal injected: ${condition.slice(0, 100)}`);
             msg.text = `/goal ${condition}\n\n${msg.text}`;

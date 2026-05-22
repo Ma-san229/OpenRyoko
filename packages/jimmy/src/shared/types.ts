@@ -322,9 +322,11 @@ export interface WebConnectorConfig {}
 export interface SlackTriageConfig {
   /** Enable the air-reading triage layer. Default: false (legacy behavior). */
   enabled?: boolean;
-  /** Binary to invoke for triage. Default: "claude" (Claude Code CLI). */
+  /** CLI engine to invoke for triage. Default: "codex"; "claude" is supported. */
+  engine?: "claude" | "codex";
+  /** Binary to invoke for triage. Defaults to the selected engine's CLI. */
   bin?: string;
-  /** Model to use for triage calls. Default: "claude-haiku-4-5". */
+  /** Model to use for triage calls. Defaults to claude-haiku-4-5 or gpt-5-nano. */
   model?: string;
   /** Soft timeout before falling back to "silent". Default: 30000ms. */
   timeoutMs?: number;
@@ -341,6 +343,19 @@ export interface SlackTriageConfig {
   activeThreadTtlMs?: number;
 }
 
+export interface SlackGoalExtractionConfig {
+  /** Enable natural-language /goal injection. Default: false due to latency. */
+  enabled?: boolean;
+  /** CLI engine used for the extraction decision. Defaults to "codex". The injected /goal itself only works with Claude sessions. */
+  engine?: "claude" | "codex";
+  /** Binary to invoke. Defaults to the selected engine's CLI. */
+  bin?: string;
+  /** Model to use for goal extraction. Defaults to claude-haiku-4-5 or gpt-5-nano. */
+  model?: string;
+  /** Hard timeout before skipping /goal injection. Default: 30000ms. */
+  timeoutMs?: number;
+}
+
 export interface SlackConnectorConfig {
   /** Unique instance identifier (e.g. "slack-support") */
   id?: string;
@@ -352,6 +367,8 @@ export interface SlackConnectorConfig {
   ignoreOldMessagesOnBoot?: boolean;
   /** Air-reading triage: decide per-message whether to reply/react/stay silent */
   triage?: SlackTriageConfig;
+  /** Natural-language autonomous goal detection. Off by default because it adds latency. */
+  goalExtraction?: SlackGoalExtractionConfig;
   /** Self-updating Slack Canvas mirroring OpenRyoko's current sessions (Agents View). */
   agentsCanvas?: {
     /** Master switch — defaults to false when the block is absent. */

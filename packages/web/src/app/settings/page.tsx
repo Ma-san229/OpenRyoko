@@ -130,11 +130,19 @@ interface Config {
       ignoreOldMessagesOnBoot?: boolean
       triage?: {
         enabled?: boolean
+        engine?: "claude" | "codex"
         bin?: string
         model?: string
         timeoutMs?: number
         threadContextLimit?: number
         persona?: string
+      }
+      goalExtraction?: {
+        enabled?: boolean
+        engine?: "claude" | "codex"
+        bin?: string
+        model?: string
+        timeoutMs?: number
       }
       agentsCanvas?: {
         enabled?: boolean
@@ -1359,9 +1367,30 @@ export default function SettingsPage() {
                 <FieldRow label="有効化">
                   <ToggleSwitch
                     checked={config.connectors?.slack?.triage?.enabled ?? false}
-                    onChange={(v) =>
+                    onChange={(v) => {
                       updateConfig(["connectors", "slack", "triage", "enabled"], v)
+                      if (v && !config.connectors?.slack?.triage?.engine) {
+                        updateConfig(["connectors", "slack", "triage", "engine"], "codex")
+                      }
+                      if (v && !config.connectors?.slack?.triage?.model) {
+                        updateConfig(["connectors", "slack", "triage", "model"], "gpt-5-nano")
+                      }
+                    }}
+                  />
+                </FieldRow>
+                <FieldRow label="Engine">
+                  <SettingsSelect
+                    value={config.connectors?.slack?.triage?.engine ?? "codex"}
+                    onChange={(v) =>
+                      updateConfig(
+                        ["connectors", "slack", "triage", "engine"],
+                        v as "claude" | "codex",
+                      )
                     }
+                    options={[
+                      { value: "codex", label: "Codex (lightweight)" },
+                      { value: "claude", label: "Claude" },
+                    ]}
                   />
                 </FieldRow>
                 <FieldRow label="Model">
@@ -1373,7 +1402,7 @@ export default function SettingsPage() {
                         v.trim() || undefined,
                       )
                     }
-                    placeholder="claude-haiku-4-5"
+                    placeholder="gpt-5-nano"
                   />
                 </FieldRow>
                 <FieldRow label="タイムアウト (ms)">
@@ -1431,7 +1460,83 @@ export default function SettingsPage() {
                         v.trim() || undefined,
                       )
                     }
-                    placeholder="claude"
+                    placeholder="codex"
+                  />
+                </FieldRow>
+
+                <div
+                  className="text-[length:var(--text-caption1)] font-[var(--weight-semibold)] text-[var(--text-tertiary)] mt-[var(--space-3)] mb-[var(--space-2)]"
+                >
+                  Goal 判定
+                </div>
+                <FieldRow label="有効化">
+                  <ToggleSwitch
+                    checked={config.connectors?.slack?.goalExtraction?.enabled ?? false}
+                    onChange={(v) => {
+                      updateConfig(["connectors", "slack", "goalExtraction", "enabled"], v)
+                      if (v && !config.connectors?.slack?.goalExtraction?.engine) {
+                        updateConfig(["connectors", "slack", "goalExtraction", "engine"], "codex")
+                      }
+                      if (v && !config.connectors?.slack?.goalExtraction?.model) {
+                        updateConfig(["connectors", "slack", "goalExtraction", "model"], "gpt-5-nano")
+                      }
+                    }}
+                  />
+                </FieldRow>
+                <FieldRow label="Engine">
+                  <SettingsSelect
+                    value={config.connectors?.slack?.goalExtraction?.engine ?? "codex"}
+                    onChange={(v) =>
+                      updateConfig(
+                        ["connectors", "slack", "goalExtraction", "engine"],
+                        v as "claude" | "codex",
+                      )
+                    }
+                    options={[
+                      { value: "codex", label: "Codex (lightweight)" },
+                      { value: "claude", label: "Claude" },
+                    ]}
+                  />
+                </FieldRow>
+                <FieldRow label="Model">
+                  <SettingsInput
+                    value={config.connectors?.slack?.goalExtraction?.model ?? ""}
+                    onChange={(v) =>
+                      updateConfig(
+                        ["connectors", "slack", "goalExtraction", "model"],
+                        v.trim() || undefined,
+                      )
+                    }
+                    placeholder="gpt-5-nano"
+                  />
+                </FieldRow>
+                <FieldRow label="タイムアウト (ms)">
+                  <SettingsInput
+                    type="number"
+                    value={
+                      config.connectors?.slack?.goalExtraction?.timeoutMs !== undefined
+                        ? String(config.connectors.slack.goalExtraction.timeoutMs)
+                        : ""
+                    }
+                    onChange={(v) =>
+                      updateConfig(
+                        ["connectors", "slack", "goalExtraction", "timeoutMs"],
+                        v.trim() ? Number(v) : undefined,
+                      )
+                    }
+                    placeholder="30000"
+                  />
+                </FieldRow>
+                <FieldRow label="バイナリパス上書き（任意）">
+                  <SettingsInput
+                    value={config.connectors?.slack?.goalExtraction?.bin ?? ""}
+                    onChange={(v) =>
+                      updateConfig(
+                        ["connectors", "slack", "goalExtraction", "bin"],
+                        v.trim() || undefined,
+                      )
+                    }
+                    placeholder="codex"
                   />
                 </FieldRow>
 

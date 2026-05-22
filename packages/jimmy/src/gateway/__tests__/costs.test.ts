@@ -1,12 +1,12 @@
-import { describe, it, expect, beforeAll } from 'vitest'
-import os from 'node:os'
-import path from 'node:path'
-import { mkdirSync } from 'node:fs'
+import { describe, it, expect, vi } from 'vitest'
 
-// Point initDb to a temp directory so tests don't touch the real database
-const tmpHome = path.join(os.tmpdir(), `jinn-test-${process.pid}`)
-mkdirSync(path.join(tmpHome, 'sessions'), { recursive: true })
-process.env.JINN_HOME = tmpHome
+vi.hoisted(() => {
+  // Static ESM imports are evaluated before top-level test code. Set the
+  // instance home in a hoisted block so shared/path constants resolve to an
+  // isolated writable database instead of the user's real runtime DB.
+  process.env.RYOKO_HOME = `/tmp/openryoko-costs-test-${process.pid}`
+  delete process.env.JINN_HOME
+})
 
 import { getCostSummary, getCostsByEmployee } from '../costs.js'
 

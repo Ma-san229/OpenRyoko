@@ -143,7 +143,7 @@ export async function runMigrate(opts: { check?: boolean; auto?: boolean }): Pro
     return;
   }
 
-  // Stage migration files into ~/.jinn/migrations/
+  // Stage migration files into ~/.ryoko/migrations/
   console.log("マイグレーションファイルをステージング中...");
   fs.mkdirSync(MIGRATIONS_DIR, { recursive: true });
 
@@ -221,6 +221,7 @@ async function applyAutoMigrations(
   // {{portalName}} substitution as `ryoko setup` would apply.
   const portalName = readPortalName();
   const replacements = buildTemplateReplacements(portalName);
+  let skippedExisting = 0;
 
   for (const version of pending) {
     const migrationDir = path.join(MIGRATIONS_DIR, version);
@@ -266,19 +267,23 @@ async function applyAutoMigrations(
         }
       } else {
         console.log(`  ${YELLOW}[skip]${RESET} ${entry.relPath} (exists — needs AI merge)`);
+        skippedExisting++;
       }
     }
   }
 
-  // Stamp version
+  if (skippedExisting > 0) {
+    console.log(`\n${YELLOW}Auto-migration partially applied.${RESET} ${applied} file(s) added, ${skippedExisting} existing file(s) need AI merge.`);
+    console.log(`${YELLOW}Version was not updated.${RESET} Run ${RESET}ryoko migrate${YELLOW} (without --auto) to merge the skipped files and complete the migration.${RESET}`);
+    console.log(`${DIM}Staged migration files remain in ${MIGRATIONS_DIR}.${RESET}\n`);
+    return;
+  }
+
   stampVersion(packageVersion);
   console.log(`\n  ${GREEN}[version]${RESET} ${instanceVersion} → ${packageVersion}`);
   console.log(`\n${GREEN}Auto-migration complete.${RESET} ${applied} file(s) added.`);
 
-  // Clean up
   fs.rmSync(MIGRATIONS_DIR, { recursive: true, force: true });
-
-  console.log(`\n${DIM}Tip: Run ${RESET}jinn migrate${DIM} (without --auto) to also merge updated files with AI.${RESET}\n`);
 }
 
 type FsEntry = { type: "file" | "dir"; relPath: string };

@@ -9,6 +9,12 @@ export interface ResolvedMcpConfig {
   mcpServers: Record<string, McpServerConfig>;
 }
 
+export interface McpSessionContext {
+  connector?: string;
+  channel?: string;
+  thread?: string;
+}
+
 /**
  * Resolve the MCP servers that should be available for a given employee
  * based on global config and employee-level overrides.
@@ -16,13 +22,14 @@ export interface ResolvedMcpConfig {
 export function resolveMcpServers(
   globalMcp: McpGlobalConfig | undefined,
   employee?: Employee,
+  sessionContext?: McpSessionContext,
 ): ResolvedMcpConfig {
   const servers: Record<string, McpServerConfig> = {};
 
   if (!globalMcp) return { mcpServers: servers };
 
   // Build the full set of available MCP servers from global config
-  const available = buildAvailableServers(globalMcp);
+  const available = buildAvailableServers(globalMcp, sessionContext);
 
   // Determine which servers this employee gets
   const employeeMcp = employee?.mcp;
@@ -52,7 +59,7 @@ export function resolveMcpServers(
 /**
  * Build the map of all available (enabled) MCP servers from global config.
  */
-function buildAvailableServers(config: McpGlobalConfig): Record<string, McpServerConfig> {
+function buildAvailableServers(config: McpGlobalConfig, sessionContext?: McpSessionContext): Record<string, McpServerConfig> {
   const servers: Record<string, McpServerConfig> = {};
 
   // Browser automation via Playwright
@@ -114,6 +121,9 @@ function buildAvailableServers(config: McpGlobalConfig): Record<string, McpServe
       args: [scriptPath],
       env: {
         JINN_GATEWAY_URL: `http://127.0.0.1:${process.env.JINN_PORT || "7777"}`,
+        ...(sessionContext?.connector ? { JINN_CURRENT_CONNECTOR: sessionContext.connector } : {}),
+        ...(sessionContext?.channel ? { JINN_CURRENT_CHANNEL: sessionContext.channel } : {}),
+        ...(sessionContext?.thread ? { JINN_CURRENT_THREAD: sessionContext.thread } : {}),
       },
     };
   }

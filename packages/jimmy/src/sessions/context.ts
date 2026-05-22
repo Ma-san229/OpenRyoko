@@ -198,7 +198,7 @@ export function buildContext(opts: {
       tier: Tier.STANDARD,
       marker: "## Available connectors",
       content: buildConnectorContext(opts.connectors, gatewayUrl, portalName),
-      summary: `## Available connectors: ${opts.connectors.join(", ")}\nUse \`curl POST ${gatewayUrl}/api/connectors/<name>/send\` to send messages.`,
+      summary: `## Available connectors: ${opts.connectors.join(", ")}\nReturn your final answer to reply to the current conversation. Use connector messaging only for different conversations.`,
     });
   }
 
@@ -640,14 +640,20 @@ function buildKnowledgeContext(): string | null {
 function buildConnectorContext(connectors: string[], gatewayUrl: string, portalName: string): string {
   const lines: string[] = [`## Available connectors: ${connectors.join(", ")}`];
   lines.push(`You can send messages and interact with external services via the ${portalName} gateway API.`);
-  lines.push(`Use bash with curl to call these endpoints:\n`);
+  lines.push("Use connector messaging only for proactive messages to a different channel or conversation.\n");
 
   for (const name of connectors) {
     lines.push(`### ${name}`);
-    lines.push(`- **Send message**: \`curl -X POST ${gatewayUrl}/api/connectors/${name}/send -H 'Content-Type: application/json' -d '{"channel":"CHANNEL_ID","text":"message"}'\``);
-    lines.push(`- **Send threaded reply**: add \`"thread":"THREAD_TS"\` to the JSON body`);
-    lines.push(`- You can proactively send messages without being asked — e.g., to notify about completed tasks, errors, or status updates`);
+    lines.push("- **Send message**: use the `send_message` tool or `/api/connectors/:name/send` only for a channel/conversation other than the one that triggered this session");
+    lines.push("- **Send threaded message**: include `thread` only when targeting a different existing thread");
+    lines.push("- Good uses: notifying another channel about completed tasks, errors, or status updates");
   }
+
+  lines.push("");
+  lines.push("### Replying to the current conversation");
+  lines.push("- The text you return as your final answer is delivered to the current user in the correct conversation/thread.");
+  lines.push("- Do not call `/send`, `curl`, or the `send_message` tool for the current conversation. That creates duplicate or meta replies.");
+  lines.push("- Your final answer is shown verbatim to the user, so make it the actual reply rather than work narration.");
 
   lines.push(`\n- **List all connectors**: \`curl ${gatewayUrl}/api/connectors\``);
   lines.push(`- Channel IDs and connector config can be found in \`~/.jinn/config.yaml\``);
@@ -867,7 +873,7 @@ You can call these endpoints with curl to inspect and manage the gateway:
 | \`/api/config\` | GET | Current config |
 | \`/api/config\` | PUT | Update config |
 | \`/api/connectors\` | GET | List connectors |
-| \`/api/connectors/:name/send\` | POST | Send message via connector |
+| \`/api/connectors/:name/send\` | POST | Proactively send to a different connector conversation; never use it to reply to the current conversation |
 | \`/api/logs\` | GET | Recent log lines |`;
 }
 
