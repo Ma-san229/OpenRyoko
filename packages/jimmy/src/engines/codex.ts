@@ -104,7 +104,13 @@ export class CodexEngine implements InterruptibleEngine {
               if (onStream) onStream(parsed.delta);
               break;
             case "text":
-              resultText += parsed.delta.content;
+              // Each codex "text" event is a *complete* agent_message, not a
+              // streaming delta. gpt-5.5 routinely emits an interim progress
+              // message ("I'll check X first…") before its tool calls and a
+              // separate final message afterwards. Keep only the latest so the
+              // interim narration doesn't leak into the delivered reply; live
+              // progress is still surfaced via onStream below.
+              resultText = parsed.delta.content;
               if (onStream) onStream(parsed.delta);
               break;
             case "error":
@@ -151,7 +157,9 @@ export class CodexEngine implements InterruptibleEngine {
                 threadId = parsed.threadId;
                 break;
               case "text":
-                resultText += parsed.delta.content;
+                // See the stdout handler above — keep only the final
+                // agent_message, never concatenate interim ones.
+                resultText = parsed.delta.content;
                 break;
               case "usage":
                 numTurns++;
