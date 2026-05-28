@@ -10,6 +10,12 @@ export interface SlackMessageEventLike {
 
 export function deriveSessionKey(event: SlackMessageEventLike): string {
   if (event.channel_type === "im") {
+    // A threaded DM message gets its own per-thread session, so opening a
+    // new thread starts a fresh conversation — same as channels. The
+    // non-threaded DM timeline stays one long-lived session per user.
+    if (event.thread_ts && event.thread_ts !== event.ts) {
+      return `slack:dm:${event.user || "unknown"}:${event.thread_ts}`;
+    }
     return `slack:dm:${event.user || "unknown"}`;
   }
 
@@ -23,11 +29,13 @@ export function deriveSessionKey(event: SlackMessageEventLike): string {
 }
 
 export function buildReplyContext(event: SlackMessageEventLike): ReplyContext {
-  // For DMs, don't set thread (DMs don't support threading the same way)
+  // For DMs: a threaded message → reply inside that thread so the per-thread
+  // session's replies stay in their thread; a non-threaded message → reply on
+  // the DM's main timeline (thread: null).
   if (event.channel_type === "im") {
     return {
       channel: event.channel,
-      thread: null,
+      thread: event.thread_ts && event.thread_ts !== event.ts ? event.thread_ts : null,
       messageTs: event.ts ?? null,
     };
   }

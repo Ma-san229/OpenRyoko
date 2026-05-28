@@ -34,74 +34,90 @@ const ACCENT_PRESETS = [
 // Slack App manifest (minimum config — paste-and-go)
 // ---------------------------------------------------------------------------
 
-const SLACK_APP_MANIFEST = JSON.stringify(
-  {
-    display_information: { name: "Ryoko" },
-    features: {
-      app_home: {
-        messages_tab_enabled: true,
-        messages_tab_read_only_enabled: false,
+// Build the paste-and-go Slack App manifest for a given bot name. The
+// Agents & AI Apps feature (features.assistant_view + assistant:write +
+// assistant_thread_* events) is enabled by default so the "New chat" button is
+// available out of the box — each new chat becomes its own session.
+function buildSlackManifest(botName?: string | null): string {
+  const name = (botName ?? "").trim() || "Ryoko"
+  return JSON.stringify(
+    {
+      display_information: { name },
+      features: {
+        app_home: {
+          messages_tab_enabled: true,
+          messages_tab_read_only_enabled: false,
+        },
+        bot_user: { display_name: name, always_online: true },
+        assistant_view: {
+          assistant_description: `${name} — your AI assistant`,
+          suggested_prompts: [
+            { title: "What can you do?", message: "What can you help me with?" },
+          ],
+        },
       },
-      bot_user: { display_name: "Ryoko", always_online: true },
-    },
-    oauth_config: {
-      scopes: {
-        bot: [
-          "app_mentions:read",
-          "canvases:read",
-          "canvases:write",
-          "channels:history",
-          "channels:read",
-          "chat:write",
-          "chat:write.customize",
-          "files:read",
-          "files:write",
-          "groups:history",
-          "groups:read",
-          "im:history",
-          "im:read",
-          "im:write",
-          "mpim:history",
-          "mpim:read",
-          "mpim:write",
-          "reactions:read",
-          "reactions:write",
-          "users:read",
-          "users:read.email",
-        ],
-        user: [
-          "channels:history",
-          "channels:read",
-          "files:read",
-          "groups:history",
-          "groups:read",
-          "im:history",
-          "im:read",
-          "mpim:history",
-          "mpim:read",
-          "search:read",
-          "users:read",
-          "bookmarks:read",
-        ],
+      oauth_config: {
+        scopes: {
+          bot: [
+            "app_mentions:read",
+            "assistant:write",
+            "canvases:read",
+            "canvases:write",
+            "channels:history",
+            "channels:read",
+            "chat:write",
+            "chat:write.customize",
+            "files:read",
+            "files:write",
+            "groups:history",
+            "groups:read",
+            "im:history",
+            "im:read",
+            "im:write",
+            "mpim:history",
+            "mpim:read",
+            "mpim:write",
+            "reactions:read",
+            "reactions:write",
+            "users:read",
+            "users:read.email",
+          ],
+          user: [
+            "channels:history",
+            "channels:read",
+            "files:read",
+            "groups:history",
+            "groups:read",
+            "im:history",
+            "im:read",
+            "mpim:history",
+            "mpim:read",
+            "search:read",
+            "users:read",
+            "bookmarks:read",
+          ],
+        },
+      },
+      settings: {
+        event_subscriptions: {
+          bot_events: [
+            "app_mention",
+            "assistant_thread_context_changed",
+            "assistant_thread_started",
+            "message.channels",
+            "message.groups",
+            "message.im",
+            "message.mpim",
+            "reaction_added",
+          ],
+        },
+        socket_mode_enabled: true,
       },
     },
-    settings: {
-      event_subscriptions: {
-        bot_events: [
-          "app_mention",
-          "message.channels",
-          "message.groups",
-          "message.im",
-          "message.mpim",
-          "reaction_added",
-        ],
-      },
-      socket_mode_enabled: true,
-    },
-  },
-  null,
-  2,
-)
+    null,
+    2,
+  )
+}
 
 // ---------------------------------------------------------------------------
 // Config type (gateway API)
@@ -524,11 +540,13 @@ function SttSettingsSection() {
 // ---------------------------------------------------------------------------
 
 function SlackSetupGuide() {
+  const { settings } = useSettings()
   const [copied, setCopied] = useState(false)
   const [open, setOpen] = useState(true)
+  const manifest = buildSlackManifest(settings.portalName)
 
   function handleCopy() {
-    navigator.clipboard.writeText(SLACK_APP_MANIFEST).then(() => {
+    navigator.clipboard.writeText(manifest).then(() => {
       setCopied(true)
       setTimeout(() => setCopied(false), 1500)
     })
@@ -583,7 +601,7 @@ function SlackSetupGuide() {
               {copied ? "コピー済み" : "コピー"}
             </button>
             <pre className="bg-[var(--fill-tertiary)] border border-[var(--separator)] rounded-[var(--radius-md)] py-[var(--space-3)] px-[var(--space-4)] overflow-x-auto text-[12px] leading-normal font-['SF_Mono',Menlo,monospace] text-[var(--text-primary)] max-h-[280px]">
-              <code>{SLACK_APP_MANIFEST}</code>
+              <code>{manifest}</code>
             </pre>
           </div>
         </div>

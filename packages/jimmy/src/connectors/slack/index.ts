@@ -282,7 +282,7 @@ export class SlackConnector implements Connector {
 
   async start() {
     this.app.message(async ({ event }) => {
-      logger.info(`[slack] Received message event: user=${(event as any).user} channel=${(event as any).channel} text="${((event as any).text || "").slice(0, 50)}"`);
+      logger.info(`[slack] Received message event: user=${(event as any).user} channel=${(event as any).channel} channel_type=${(event as any).channel_type ?? "-"} thread_ts=${(event as any).thread_ts ?? "-"} subtype=${(event as any).subtype ?? "-"} text="${((event as any).text || "").slice(0, 50)}"`);
       // Skip bot's own messages
       if ((event as any).bot_id) {
         logger.info(`[slack] Skipping bot message`);
