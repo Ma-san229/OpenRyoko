@@ -44,6 +44,14 @@ const DEFAULT_TITLE = "Ryoko Agents View";
 const DEFAULT_POLL_MS = 30_000;
 const MIN_POLL_MS = 5_000;
 const DEFAULT_MAX_PER_GROUP = 10;
+/**
+ * Self-disable the canvas loop after this many consecutive tick failures.
+ * At the default 30s interval this is ~5 minutes of solid failures — long
+ * enough to ride out transient Slack hiccups, short enough that a genuinely
+ * broken canvas (missing scope, deleted channel, etc.) stops spamming the
+ * logs and Slack API instead of failing every 30s forever.
+ */
+const MAX_CONSECUTIVE_FAILURES = 10;
 
 type SessionStateGroup = "running" | "waiting" | "interrupted" | "error" | "idle";
 
@@ -241,6 +249,8 @@ export class AgentsCanvasUpdater {
   private timer: ReturnType<typeof setInterval> | null = null;
   private inflight = false;
   private stopped = false;
+  /** Consecutive tick() failures — resets to 0 on any successful tick. */
+  private consecutiveFailures = 0;
   private canvasId: string | null = null;
   private lastMarkdown: string | null = null;
   private readonly client: SlackClientLike;
@@ -272,6 +282,7 @@ export class AgentsCanvasUpdater {
     }
     if (this.timer) return; // already running — make start() idempotent
     this.stopped = false;
+    this.consecutiveFailures = 0;
     logger.info(
       `[agents-canvas] starting (interval=${this.config.pollIntervalMs}ms, channel=${this.config.channelId || "standalone"})`,
     );
@@ -300,15 +311,29 @@ export class AgentsCanvasUpdater {
         maxPerGroup: this.config.maxPerGroup,
       });
       // Skip no-op updates to spare Slack API calls + avoid edit churn.
-      if (markdown === this.lastMarkdown) return;
+      if (markdown === this.lastMarkdown) {
+        this.consecutiveFailures = 0;
+        return;
+      }
       // stop() may have fired while we were rendering — bail before any I/O.
       if (this.stopped) return;
       const published = await this.publish(markdown);
       if (published) {
         this.lastMarkdown = markdown;
       }
+      this.consecutiveFailures = 0;
     } catch (err) {
-      logger.warn(`[agents-canvas] tick failed: ${err}`);
+      this.consecutiveFailures++;
+      logger.warn(
+        `[agents-canvas] tick failed (${this.consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}): ${err}`,
+      );
+      if (this.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        logger.error(
+          `[agents-canvas] disabling after ${this.consecutiveFailures} consecutive failures — ` +
+            `last error: ${err}. Fix the cause and restart the gateway to re-enable.`,
+        );
+        this.stop();
+      }
     } finally {
       this.inflight = false;
     }
