@@ -2,6 +2,16 @@
 
 > **バージョン体系について**: 2026.4.26 から日付ベース (`YYYY.M.D`) のCalVerに移行しました。npm semver の制約上、月・日の leading zero は付けません (例: 4月26日 → `2026.4.26`)。
 
+## [2026.5.29] - 2026-05-29
+
+### Features
+- **`ryoko update --restart`**: CLI 更新（＋マイグレーション）の後にゲートウェイを自動再起動するオプションを追加。再起動先は systemd `--user` ユニット → systemd system ユニット（既定名 `openryoko`）→ フォークデーモン（PIDファイル/ポート）の順に自動検出します。system ユニットへ直接 `systemctl restart` する権限が無い場合は `sudo -n` を試行し、それも不可なら手動コマンドを案内します。何も起動していなければ何もしません（`none`）。既定の `ryoko update` は従来どおり再起動しません（安全側のオプトイン）。
+- **`ryoko update --service <name>` / `RYOKO_SERVICE`**: 再起動する systemd ユニット名を上書き可能に（既定 `openryoko`）。Linux 以外では systemd 検出をスキップしデーモン経路のみ。
+
+### Tests
+- jimmy: 32 files / 377 tests pass。
+- `restartGateway()` の検出ロジック（systemd user/system、sudo フォールバック、権限拒否、サービス名上書き、デーモン再fork、none、非Linux）の回帰テスト（`restart.test.ts`）を追加。
+
 ## [2026.5.28] - 2026-05-28
 
 ### Features
