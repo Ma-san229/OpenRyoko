@@ -16,6 +16,7 @@ import { runTriage } from "./triage.js";
 import { ConversationTracker } from "./conversation-tracker.js";
 import { AgentsCanvasUpdater } from "./agents-canvas.js";
 import { extractGoalCondition, shouldExtractGoal } from "./goal-extractor.js";
+import { startsWithSlashCommand } from "../../sessions/manager.js";
 import type { SlackTriageConfig } from "../../shared/types.js";
 import { TMP_DIR } from "../../shared/paths.js";
 import { logger } from "../../shared/logger.js";
@@ -380,6 +381,13 @@ export class SlackConnector implements Connector {
         }
       }
 
+      // Slash commands (/new, /status, …) are control directives the session
+      // manager parses by exact string match. Wrapping them in the
+      // "[Thread context — …]" preamble below silently breaks that parsing,
+      // so a command typed inside a Slack thread would never be intercepted.
+      // Commands don't need conversation context anyway — pass them verbatim.
+      const text = startsWithSlashCommand(rawText) ? rawText : parentContext + rawText;
+
       const msg: IncomingMessage = {
         connector: this.name,
         source: "slack",
@@ -390,7 +398,7 @@ export class SlackConnector implements Connector {
         thread: (event as any).thread_ts,
         user: (event as any).user,
         userId: (event as any).user,
-        text: parentContext + rawText,
+        text,
         attachments,
         raw: event,
         transportMeta: {
