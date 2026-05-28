@@ -21,7 +21,11 @@ function buildRyokoArgs(args: string[]): string[] {
   return instance ? ["-i", instance, ...args] : args;
 }
 
-export async function runUpdate(opts: { noMigrate?: boolean }): Promise<void> {
+export async function runUpdate(opts: {
+  noMigrate?: boolean;
+  restart?: boolean;
+  service?: string;
+}): Promise<void> {
   const currentVersion = getPackageVersion();
 
   console.log(`\n${DIM}Current CLI version:${RESET} ${currentVersion}`);
@@ -49,6 +53,48 @@ export async function runUpdate(opts: { noMigrate?: boolean }): Promise<void> {
     console.log(`Run ${DIM}ryoko setup${RESET} to create one.\n`);
   }
 
+  if (opts.restart) {
+    console.log(`\n${YELLOW}Restarting gateway...${RESET}`);
+    try {
+      const { restartGateway } = await import("../gateway/lifecycle.js");
+      const result = restartGateway(opts.service);
+      switch (result.method) {
+        case "systemd-user":
+          console.log(`${GREEN}Restarted systemd --user unit '${result.service}'.${RESET}`);
+          break;
+        case "systemd-system":
+          if (result.detail === "permission denied") {
+            console.error(
+              `${RED}Could not restart systemd unit '${result.service}' (permission denied).${RESET}`,
+            );
+            console.error(
+              `Run manually: ${DIM}sudo systemctl restart ${result.service}${RESET}\n`,
+            );
+          } else {
+            const via = result.detail ? ` ${DIM}(${result.detail})${RESET}` : "";
+            console.log(`${GREEN}Restarted systemd unit '${result.service}'.${RESET}${via}`);
+          }
+          break;
+        case "daemon":
+          console.log(`${GREEN}Restarted background daemon.${RESET}`);
+          break;
+        case "none":
+          console.log(`${DIM}Gateway was not running — nothing to restart.${RESET}`);
+          break;
+      }
+    } catch (err) {
+      console.error(`\n${RED}Gateway restart failed:${RESET} ${err}`);
+      console.error(`The CLI update succeeded. Restart the gateway manually.\n`);
+      process.exit(1);
+    }
+  }
+
   console.log(`\n${GREEN}OpenRyoko update complete.${RESET}`);
-  console.log(`${DIM}If the gateway is running, restart it to use the updated CLI code.${RESET}\n`);
+  if (!opts.restart) {
+    console.log(
+      `${DIM}If the gateway is running, restart it (or re-run with --restart) to use the updated CLI code.${RESET}\n`,
+    );
+  } else {
+    console.log("");
+  }
 }

@@ -1,4 +1,4 @@
-import { execSync, fork } from "node:child_process";
+import { execSync, execFileSync, fork } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -138,6 +138,99 @@ function findPidOnPort(port: number): number | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Default systemd unit name (see scripts/systemd/openryoko.service).
+ * Override with the RYOKO_SERVICE env var or an explicit argument when the
+ * deployment uses a different unit name (e.g. a per-instance unit).
+ */
+const DEFAULT_SERVICE = "openryoko";
+
+export type RestartMethod =
+  | "systemd-user"
+  | "systemd-system"
+  | "daemon"
+  | "none";
+
+export interface RestartResult {
+  method: RestartMethod;
+  /** systemd unit name, when a systemd method was used. */
+  service?: string;
+  /** Human-readable note (e.g. "via sudo", "permission denied"). */
+  detail?: string;
+}
+
+function hasSystemctl(): boolean {
+  if (process.platform !== "linux") return false;
+  try {
+    execFileSync("systemctl", ["--version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether `systemctl [scope] is-active <service>` reports the unit as active.
+ * `is-active` exits non-zero for inactive units, so the state is read from
+ * stdout in both the success and error paths.
+ */
+function systemctlActive(scopeArgs: string[], service: string): boolean {
+  try {
+    const out = execFileSync("systemctl", [...scopeArgs, "is-active", service], {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return out.trim() === "active";
+  } catch (err) {
+    const stdout = (err as { stdout?: Buffer | string }).stdout;
+    return stdout?.toString().trim() === "active";
+  }
+}
+
+/**
+ * Restart the running gateway after a CLI update so the new code takes effect.
+ *
+ * Detection order:
+ *   1. systemd --user unit (privilege-free)
+ *   2. systemd system unit (falls back to `sudo -n` if direct restart is denied)
+ *   3. plain forked daemon (PID file / port) — stop + re-fork
+ *
+ * Returns how the restart was performed. `{ method: "none" }` means nothing
+ * was running, so nothing was restarted.
+ */
+export function restartGateway(serviceName?: string): RestartResult {
+  const service = serviceName || process.env.RYOKO_SERVICE || DEFAULT_SERVICE;
+
+  if (hasSystemctl()) {
+    if (systemctlActive(["--user"], service)) {
+      execFileSync("systemctl", ["--user", "restart", service], { stdio: "inherit" });
+      return { method: "systemd-user", service };
+    }
+    if (systemctlActive([], service)) {
+      try {
+        execFileSync("systemctl", ["restart", service], { stdio: "inherit" });
+        return { method: "systemd-system", service };
+      } catch {
+        try {
+          execFileSync("sudo", ["-n", "systemctl", "restart", service], { stdio: "inherit" });
+          return { method: "systemd-system", service, detail: "via sudo" };
+        } catch {
+          return { method: "systemd-system", service, detail: "permission denied" };
+        }
+      }
+    }
+  }
+
+  // Fallback: plain forked daemon managed via PID file / port.
+  if (getStatus().running) {
+    stop();
+    startDaemon(loadConfig());
+    return { method: "daemon" };
+  }
+
+  return { method: "none" };
 }
 
 export interface GatewayStatus {

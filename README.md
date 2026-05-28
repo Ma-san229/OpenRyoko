@@ -132,7 +132,7 @@ ryoko setup
 ryoko start
 ```
 
-アップデートは `ryoko update`。
+アップデートは `ryoko update`。稼働中のゲートウェイをそのまま新コードに載せ替えたい場合は `ryoko update --restart` を使うと、更新・マイグレーション後に自動で再起動します（systemd ユニット → フォークデーモンの順に検出。systemd ユニット名は `--service <name>` か環境変数 `RYOKO_SERVICE` で上書き可、既定は `openryoko`）。
 
 ### ソースから入れる（開発・改造向け）
 
@@ -288,6 +288,10 @@ journalctl -u openryoko -f
 unit ファイルに焼き込みます。手動で `openryoko.service` をコピーする場合は、
 テンプレート先頭のコメント（User / WorkingDirectory / Environment=PATH=… /
 ExecStart）を必ず編集してください。
+
+常駐運用ではアップデートと再起動を `ryoko update --restart` の1コマンドで完結できます。
+この unit（`openryoko`）を自動検出して `systemctl restart` を実行します（直接の権限が無い場合は
+`sudo -n` を試行）。ユニット名が異なる場合は `--service <name>` か環境変数 `RYOKO_SERVICE` で指定してください。
 
 > **rootで動かしたい場合**: 非推奨ですが、OpenRyoko が `IS_SANDBOX=1` を自動付与
 > するので Claude CLI の root 拒否はバイパスされます。それでも専用ユーザー運用を強く推奨します。
