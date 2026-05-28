@@ -2,6 +2,26 @@
 
 > **バージョン体系について**: 2026.4.26 から日付ベース (`YYYY.M.D`) のCalVerに移行しました。npm semver の制約上、月・日の leading zero は付けません (例: 4月26日 → `2026.4.26`)。
 
+## [2026.5.28] - 2026-05-28
+
+### Features
+- **Slack Assistant「新しいチャット」= 新セッション**: Assistant（Agents & AI Apps）の各チャットが持つ `thread_ts` ごとに独立した DM セッションを張るようにしました。「新しいチャット」を押すと、その時点の `engines.default` で新規セッションが始まります（従来は DM 全体が1セッションに合流し、最初に作られたエンジンに固定され続けていました）。`thread_ts` の無い素の DM は従来どおり1ユーザー1セッションを継続。`buildReplyContext` も threaded DM では当該スレッドに返信するよう変更。
+- **Slack App manifest: Assistant 機能をデフォルト ON**: Settings のコピペ用 manifest に `features.assistant_view` ＋ `assistant:write` scope ＋ `assistant_thread_started` / `assistant_thread_context_changed` events を既定で含め、新規アプリでも「新しいチャット」が即使える状態にしました。
+- **manifest の bot 名テンプレート化**: manifest の `display_information.name` / `bot_user.display_name` を設定済みの bot 名（`portalName`）から生成。未設定時のみ "Ryoko"。
+
+### Fixes
+- **Slack slash commands in threads**: スレッド内（および thread context 付きメッセージ）で `/new` `/status` `/model` `/doctor` `/cron` が無視されていた問題を修正。connector が付与する「[Thread context — parent message: …]」プリアンブルでコマンドが先頭から押し出され、エンジンに素通りしていたのが原因。生のユーザーテキストでコマンド判定し、コマンド時はプリアンブルを付けないようにしました（`SLASH_COMMANDS` / `startsWithSlashCommand()` を共有ヘルパー化）。特に `/new` が効かずスレッドが元エンジンを再開し続ける問題を解消。
+- **Codex interim narration leak**: Codex エンジンの `text` イベントは（streaming delta ではなく）`item.completed` の完成済み agent_message を運ぶため、全て連結すると gpt-5.5 の中間進捗（例「まず boot ファイルを確認します」）が本回答の前に混ざっていました。最新の agent_message のみを結果として採用するよう修正（途中経過は従来どおり onStream で表示）。Gemini の delta 蓄積は正しいので不変更。
+- **Agents View Canvas self-disable**: canvas 作成失敗（`canvas_tab_creation_failed` 等）時に 30s ごとへ無限リトライしてログと Slack API を叩き続ける問題を修正。連続 tick 失敗を数え、10回連続（既定間隔で約5分）で ERROR ログを出してループ停止。成功でカウンタはリセットするので一時的障害では止まりません。
+
+### Improvements
+- **Slack 受信ログ**: inbound メッセージのログに `channel_type` / `thread_ts` / `subtype` を出力し、スレッド / Assistant 周りの切り分けをしやすくしました。
+
+### Tests
+- jimmy: 31 files / 369 tests pass。web: typecheck pass。
+- per-thread DM keying と reply context の回帰テスト（`threads.test.ts`）を追加。
+- slash command の thread-context 内検出（`slash-commands.test.ts`）、Codex interim narration（`codex.test.ts`）、Agents Canvas 連続失敗時の self-disable（`agents-canvas.test.ts`）の回帰テストを追加。
+
 ## [2026.5.22] - 2026-05-22
 
 ### Features
