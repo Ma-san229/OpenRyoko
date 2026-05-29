@@ -18,6 +18,35 @@ const DEAD_SESSION_PATTERNS = [
 ];
 
 /**
+ * Anthropic rejects a `--resume` request whose transcript contains a corrupted
+ * assistant turn — most commonly when extended-thinking blocks no longer match
+ * the original signed response (e.g. a long tool loop that got collapsed under a
+ * single message id, or a turn that was killed mid-stream). The 400 looks like:
+ *   "messages.1.content.13: thinking or redacted_thinking blocks in the latest
+ *    assistant message cannot be modified. These blocks must remain as they were
+ *    in the original response."
+ * Unlike a rate limit or a transient failure, this error is *baked into the
+ * persisted transcript*: every subsequent resume of the same engine session
+ * replays the poisoned history and fails identically. The only recovery is to
+ * abandon the engine session id and start a fresh one — and crucially this can
+ * happen *after* real work was done, so it is NOT gated on zeroCost the way
+ * isDeadSessionError is.
+ */
+const POISONED_TRANSCRIPT_RE =
+  /(thinking|redacted_thinking)\b[\s\S]*?blocks[\s\S]*?(cannot be modified|must remain as they were)/i;
+
+/**
+ * Detect whether an engine result indicates the persisted transcript can no
+ * longer be resumed (see POISONED_TRANSCRIPT_RE). Caller should clear the engine
+ * session id and retry with a fresh session, identically to a dead session.
+ */
+export function isPoisonedTranscriptError(result: EngineResult): boolean {
+  if (!result.error) return false;
+  if (result.rateLimit?.status) return false;
+  return POISONED_TRANSCRIPT_RE.test(result.error);
+}
+
+/**
  * Detect whether an engine result indicates a dead/expired session rather than
  * a transient or rate-limit error. A dead session is one where the engine exited
  * with an error but did zero work (no cost, no turns) and there is no rate-limit

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { EngineResult } from "../types.js";
-import { isDeadSessionError, detectRateLimit } from "../rateLimit.js";
+import { isDeadSessionError, detectRateLimit, isPoisonedTranscriptError } from "../rateLimit.js";
 
 function makeResult(overrides: Partial<EngineResult> = {}): EngineResult {
   return {
@@ -118,5 +118,45 @@ describe("isDeadSessionError", () => {
     });
     expect(detectRateLimit(rateLimited).limited).toBe(true);
     expect(isDeadSessionError(rateLimited)).toBe(false);
+  });
+});
+
+describe("isPoisonedTranscriptError", () => {
+  // The exact 400 surfaced from Anthropic when a resumed transcript has a
+  // corrupted assistant turn (collapsed thinking blocks).
+  const REAL_ERROR =
+    "API Error: 400 messages.1.content.13: thinking or redacted_thinking blocks in the latest assistant message cannot be modified. These blocks must remain as they were in the original response.";
+
+  it("returns true for the real corrupted-thinking 400", () => {
+    expect(isPoisonedTranscriptError(makeResult({ error: REAL_ERROR }))).toBe(true);
+  });
+
+  it("returns true even when real work was done (non-zero cost/turns)", () => {
+    // The whole point: this happens AFTER a long successful tool loop, so the
+    // zeroCost gate of isDeadSessionError would miss it.
+    const result = makeResult({ error: REAL_ERROR, cost: 0.42, numTurns: 40 });
+    expect(isPoisonedTranscriptError(result)).toBe(true);
+    expect(isDeadSessionError(result)).toBe(false);
+  });
+
+  it("matches the redacted_thinking variant", () => {
+    const result = makeResult({
+      error: "400 redacted_thinking blocks ... cannot be modified",
+    });
+    expect(isPoisonedTranscriptError(result)).toBe(true);
+  });
+
+  it("returns false for unrelated errors", () => {
+    expect(isPoisonedTranscriptError(makeResult({ error: "rate limit exceeded" }))).toBe(false);
+    expect(isPoisonedTranscriptError(makeResult({ error: "Claude exited with code 1" }))).toBe(false);
+    expect(isPoisonedTranscriptError(makeResult({}))).toBe(false);
+  });
+
+  it("does not treat a rate-limited result as poisoned", () => {
+    const result = makeResult({
+      error: REAL_ERROR,
+      rateLimit: { status: "rejected", resetsAt: 9999999999 },
+    });
+    expect(isPoisonedTranscriptError(result)).toBe(false);
   });
 });
