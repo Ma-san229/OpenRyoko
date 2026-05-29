@@ -23,7 +23,7 @@ import { SessionQueue } from "./queue.js";
 import { JINN_HOME } from "../shared/paths.js";
 import { logger } from "../shared/logger.js";
 import { resolveEffort } from "../shared/effort.js";
-import { computeNextRetryDelayMs, computeRateLimitDeadlineMs, detectRateLimit, isDeadSessionError } from "../shared/rateLimit.js";
+import { computeNextRetryDelayMs, computeRateLimitDeadlineMs, detectRateLimit, isDeadSessionError, isPoisonedTranscriptError } from "../shared/rateLimit.js";
 import { getClaudeExpectedResetAt, isLikelyNearClaudeUsageLimit, recordClaudeRateLimit } from "../shared/usageAwareness.js";
 import { loadJobs } from "../cron/jobs.js";
 import { setCronJobEnabled, triggerCronJob } from "../cron/scheduler.js";
@@ -403,11 +403,44 @@ export class SessionManager {
 
       let wasInterrupted = result.error?.startsWith("Interrupted");
 
+      // Poisoned transcript: the persisted engine history is corrupted (e.g.
+      // collapsed extended-thinking blocks) so every --resume of this engine
+      // session replays it and fails with the same 400. Clear the engine session
+      // id so the NEXT message starts on a clean session, but deliberately do NOT
+      // auto-replay the current prompt: the failed run may already have executed
+      // tools with side effects, and a fresh rerun would duplicate them (a
+      // resumed `claude -p` reports cumulative cost/turns, so "no work was done"
+      // cannot be reliably detected here). Ask the user to resend instead.
+      const isPoisoned = !wasInterrupted && isPoisonedTranscriptError(result);
+      if (isPoisoned) {
+        logger.warn(`Poisoned transcript for ${session.id} — clearing engine session id; not auto-retrying to avoid duplicate side effects`);
+        const meta = { ...(session.transportMeta || {}) } as Record<string, unknown>;
+        delete meta["engineSessions"];
+        delete meta["engineOverride"];
+        updateSession(session.id, { engineSessionId: null, transportMeta: meta as any });
+        session = { ...session, engineSessionId: null, transportMeta: meta as any };
+        // Blank the returned sessionId so the post-run persistence below does not
+        // re-attach the poisoned engine session id, drop any partial result text
+        // and intermediate turns (otherwise the reply path would surface those
+        // stale fragments instead of the reset notice), and replace the raw 400
+        // with an actionable message for the user.
+        result = {
+          ...result,
+          sessionId: "",
+          result: "",
+          turns: [],
+          error:
+            "⚠️ 直前の会話履歴が壊れていたため（thinking ブロックの破損）、このセッションをリセットしました。お手数ですが同じ内容をもう一度送ってください。次回からは正常に応答できます。",
+        };
+      }
+
       // Dead session detection: if the engine session ID is stale (expired/invalid),
       // clear cached engine sessions from transportMeta so the next attempt starts fresh.
       // Also sets a flag so we skip the rate-limit retry loop below (a dead session
       // error can contain text like "429" that would otherwise match RATE_LIMIT_ERROR_RE).
-      let isDead = !wasInterrupted && isDeadSessionError(result);
+      // (Poisoned transcripts are handled above and excluded here — unlike a stale
+      // resume id, they must not trigger an automatic prompt replay.)
+      let isDead = !wasInterrupted && !isPoisoned && isDeadSessionError(result);
       if (isDead) {
         logger.warn(`Dead session detected for ${session.id} — clearing stale engine IDs`);
         const meta = { ...(session.transportMeta || {}) } as Record<string, unknown>;
@@ -451,8 +484,8 @@ export class SessionManager {
       }
 
       // Detect rate limit / usage limit errors and auto-retry.
-      // Skip entirely for dead sessions — they are not rate limits.
-      const rateLimit = (!wasInterrupted && !isDead) ? detectRateLimit(result) : { limited: false as const };
+      // Skip entirely for dead/poisoned sessions — they are not rate limits.
+      const rateLimit = (!wasInterrupted && !isDead && !isPoisoned) ? detectRateLimit(result) : { limited: false as const };
       if (rateLimit.limited) {
         recordClaudeRateLimit(rateLimit.resetsAt);
 
