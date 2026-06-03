@@ -32,12 +32,24 @@ Codex がレビュー→実装まで完結できるよう、ファイル単位�
 - OpenRyoko独自: `sshHost` ターンは headless `claude -p` フォールバックへ委譲（ローカルPTYはリモート実行不可）。kill/isAlive/killAll も委譲
 - テスト: 本家8本移植 + SSHフォールバック4本。計 432 green、tsc クリーン
 
-### #7 Phase 2（残作業 — CLI xterm view）
-PTY を Web ダッシュボードの xterm ビューに繋ぐ部分。コスト改善の本命ではないため後続。
-- `gateway/pty-ws.ts`（`/ws/pty/:sessionId` WebSocket）— エンジンの `PtyViewEngine` メソッド(subscribeOutput/getScrollback/setViewing/writeStdin/resizePty/ensureIdleSpawn)は実装済みなので接続するだけ
-- Next.js 側の `CliTerminal`（xterm.js）コンポーネント + ビュー切替
-- サブエージェントカードUI（#6 と統合）— StreamDelta の `subAgent` タグは既に流れる
-- `updateGatewayPtyPids` による PTY pid の gateway.json 追記（プロセス管理用）
+### #7 Phase 2（実装済み — CLI xterm view）
+PTY を Web ダッシュボードのライブ xterm ビューに接続。
+- `gateway/pty-ws.ts`（`/ws/pty/:sessionId` WebSocket、scrollback replay + stdin/resize/viewing + lazy spawn）
+- `gateway/server.ts`: `ptyWss` + `ptyViewEngines` map + `/ws/pty` upgrade（host/Origin ガード + decodeURIComponent try/catch + shutdown close）
+- `gateway/api.ts`: `/api/status` に `engines.claude.interactive` を露出
+- Next.js `cli-terminal.tsx`（xterm.js, inline page-visibility, iOS glyph fix, touch-scroll）+ `chat-pane.tsx` で `engine==='claude' && interactive` 時に live xterm、それ以外は poll-based transcript
+- 依存: `@xterm/xterm` + `@xterm/addon-fit`、`next.config.ts` に `/ws/pty` dev rewrite
+- Codex レビュー（CRITICAL: WS Origin/host ガード 他4件）反映済み
+
+### #7 本番デプロイ状況（リモート SENSUI, systemd ryoko.service）
+- **interactive:true で稼働中**（PID更新済み, gateway.json present）。グローバル `openryoko` を本番ソースビルド + `npm install -g .` で更新（公開npm publishは未実施=このサーバー限定、v2026.5.29へロールバック可）
+- 実機検証: 制御ターン4秒完走 + **10分監視で組織的実トラフィックがバースト完走（timeout 0 / stuck 0）**。初回の1件ハングは再現不能=一過性(boot/recovery race)で、15分ターンタイムアウトの安全網を追加済み
+- セキュリティ: /ws/pty の不正Origin拒否を本番で確認（`000`切断）
+- ロールバック: `interactive:false` + 再起動で headless `claude -p` に即復帰（config.yaml.bak-pre-interactive 保全）
+
+### 残課題（polish）
+- interactive 経路の `lastContextTokens` / cost が transcript 復元由来で未populate のケースあり（Max定額なので cost=0 は正しい。context メーターのみ要調整）
+- 0.0.0.0 運用時の WS Origin ポリシー（既存HTTP CORS方針と一貫、必要なら厳格化余地）
 
 ---
 
