@@ -2,6 +2,15 @@
 
 > **バージョン体系について**: 2026.4.26 から日付ベース (`YYYY.M.D`) のCalVerに移行しました。npm semver の制約上、月・日の leading zero は付けません (例: 4月26日 → `2026.4.26`)。
 
+## [2026.6.4] - 2026-06-03
+
+### Features
+- **インタラクティブモードのセットアップ・プロンプト**: `ryoko setup` / `ryoko update` で、Claude をインタラクティブ PTY（Max 定額課金）で動かすか対話で選べるように。TTY のときのみ・未設定のときのみ尋ね、CI/cron ではスキップ。`update` では再起動前に尋ねるので選択が即反映されます。
+- **`ryoko config interactive [on|off]`**: ダッシュボード不要で `engines.claude.interactive` を確認・変更できる CLI。設定の書き込みは行ベースで config.yaml のコメント・整形を保持し、`engines.claude` ブロックにスコープ限定（他セクションの同名キーを誤爆しない）。
+
+### Tests
+- jimmy: 450 tests pass（`interactive-config` の行ベース編集・ブロックスコープ・各値形式の回帰テストを追加）。
+
 ## [2026.6.3] - 2026-06-03
 
 本家 jinn の engine sprint からの移植 + 独自堅牢化。
