@@ -53,6 +53,12 @@ export interface EngineResult {
   cost?: number;
   durationMs?: number;
   numTurns?: number;
+  /**
+   * Most recent turn's INPUT context size (input + cache-read + cache-creation
+   * tokens) — i.e. how full the context window currently is. Undefined when the
+   * engine doesn't surface usage. Powers the context meter in the UI.
+   */
+  contextTokens?: number;
   error?: string;
   /**
    * Optional rate limit metadata returned by an engine.
@@ -167,6 +173,8 @@ export interface Session {
   effortLevel: string | null;
   totalCost: number;
   totalTurns: number;
+  /** Most recent turn's input context size (context-meter). Null when unknown. */
+  lastContextTokens: number | null;
   queueDepth?: number;
   transportState?: "idle" | "queued" | "running" | "error" | "interrupted";
   createdAt: string;

@@ -7,6 +7,8 @@ import { ChatInput } from '@/components/chat/chat-input'
 import { ChatEmployeePicker } from '@/components/chat/chat-employee-picker'
 import { QueuePanel } from '@/components/chat/queue-panel'
 import { CliTranscript } from '@/components/chat/cli-transcript'
+import { ContextMeter } from '@/components/chat/context-meter'
+import { formatContextTokens } from '@/lib/context-meter'
 import { buildNewSessionParams } from '@/components/chat/new-chat-helpers'
 import type { Employee } from '@/lib/api'
 import type { Message, MediaAttachment } from '@/lib/conversations'
@@ -446,6 +448,9 @@ export function ChatPane({
         session.employee ? `Employee: ${session.employee}` : null,
         session.engine ? `Engine: ${session.engine}` : null,
         session.model ? `Model: ${session.model}` : null,
+        typeof session.lastContextTokens === 'number'
+          ? `Context: ${formatContextTokens(session.lastContextTokens)}`
+          : null,
         session.createdAt ? `Created: ${session.createdAt}` : null,
       ]
         .filter(Boolean)
@@ -593,6 +598,22 @@ export function ChatPane({
       ) : (sessionId || messages.length > 0) ? (
         <ChatMessages messages={messages} loading={loading} streamingText={streamingText} />
       ) : null}
+
+      {/* Context meter */}
+      {viewMode === 'chat' && sessionId && typeof currentSession?.lastContextTokens === 'number' && (
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'flex-end',
+            padding: '4px 12px 0',
+          }}
+        >
+          <ContextMeter
+            tokens={currentSession.lastContextTokens as number}
+            model={currentSession.model as string | null | undefined}
+          />
+        </div>
+      )}
 
       {/* Queue panel */}
       {viewMode === 'chat' && (

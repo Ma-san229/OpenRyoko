@@ -41,6 +41,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     effortLevel: null,
     totalCost: 0,
     totalTurns: 0,
+    lastContextTokens: null,
     createdAt: "2026-05-13T01:00:00.000Z",
     lastActivity: "2026-05-13T01:00:00.000Z",
     lastError: null,

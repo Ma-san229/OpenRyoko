@@ -42,6 +42,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     effortLevel: null,
     totalCost: 0,
     totalTurns: 0,
+    lastContextTokens: null,
     createdAt: new Date().toISOString(),
     lastActivity: new Date().toISOString(),
     lastError: null,

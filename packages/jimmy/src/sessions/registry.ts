@@ -92,6 +92,7 @@ function rowToSession(row: Record<string, unknown>): Session {
     status: row.status as Session['status'],
     totalCost: (row.total_cost as number) ?? 0,
     totalTurns: (row.total_turns as number) ?? 0,
+    lastContextTokens: (row.last_context_tokens as number) ?? null,
     createdAt: row.created_at as string,
     lastActivity: row.last_activity as string,
     lastError: (row.last_error as string) ?? null,
@@ -170,6 +171,7 @@ export function migrateSessionsSchema(database: Database.Database): void {
     ['total_cost', 'REAL', '0'],
     ['total_turns', 'INTEGER', '0'],
     ['effort_level', 'TEXT'],
+    ['last_context_tokens', 'INTEGER'],
   ];
 
   for (const [name, type, defaultVal] of missingColumns) {
@@ -275,6 +277,7 @@ export function createSession(opts: CreateSessionOpts & { prompt?: string; porta
     status: 'idle',
     totalCost: 0,
     totalTurns: 0,
+    lastContextTokens: null,
     createdAt: now,
     lastActivity: now,
     lastError: null,
@@ -308,6 +311,7 @@ export interface UpdateSessionFields {
   lastActivity?: string;
   lastError?: string | null;
   title?: string;
+  lastContextTokens?: number | null;
 }
 
 export function updateSession(id: string, updates: UpdateSessionFields): Session | undefined {
@@ -354,6 +358,10 @@ export function updateSession(id: string, updates: UpdateSessionFields): Session
   if (updates.title !== undefined) {
     sets.push('title = ?');
     values.push(updates.title);
+  }
+  if (updates.lastContextTokens !== undefined) {
+    sets.push('last_context_tokens = ?');
+    values.push(updates.lastContextTokens);
   }
 
   if (sets.length === 0) return getSession(id);

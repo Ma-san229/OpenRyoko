@@ -833,6 +833,7 @@ export class SessionManager {
         })(),
         lastActivity: new Date().toISOString(),
         lastError: wasInterrupted ? null : (result.error ?? null),
+        ...(typeof result.contextTokens === "number" ? { lastContextTokens: result.contextTokens } : {}),
       });
       if (updatedSession) {
         notifyParentSession(updatedSession, { result: result.result, error: wasInterrupted ? null : (result.error ?? null), cost: result.cost, durationMs: result.durationMs }, { alwaysNotify: employee?.alwaysNotify });
