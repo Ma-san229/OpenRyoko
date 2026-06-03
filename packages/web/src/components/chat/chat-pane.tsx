@@ -7,6 +7,7 @@ import { ChatInput } from '@/components/chat/chat-input'
 import { ChatEmployeePicker } from '@/components/chat/chat-employee-picker'
 import { QueuePanel } from '@/components/chat/queue-panel'
 import { CliTranscript } from '@/components/chat/cli-transcript'
+import { CliTerminal } from '@/components/chat/cli-terminal'
 import { ContextMeter } from '@/components/chat/context-meter'
 import { formatContextTokens } from '@/lib/context-meter'
 import { buildNewSessionParams } from '@/components/chat/new-chat-helpers'
@@ -75,6 +76,9 @@ export function ChatPane({
   const [streamingText, setStreamingText] = useState('')
   const intermediateStartRef = useRef<number>(-1)
   const [currentSession, setCurrentSession] = useState<Record<string, unknown> | null>(null)
+  // Whether the gateway's Claude engine runs as a live PTY (interactive). Drives
+  // the CLI view: live xterm (/ws/pty) when on, poll-based transcript when off.
+  const [claudeInteractive, setClaudeInteractive] = useState(false)
   const sessionIdRef = useRef(sessionId)
 
   // Employee picker state for new chat
@@ -255,6 +259,20 @@ export function ChatPane({
       }
     })
   }, [subscribe, persistIntermediate, onRefresh])
+
+  // Detect whether the gateway runs Claude as a live PTY (interactive) so the CLI
+  // view can attach the xterm stream. Fetched once; capability is gateway-wide.
+  useEffect(() => {
+    let cancelled = false
+    api
+      .getStatus()
+      .then((s) => {
+        const engines = (s as { engines?: { claude?: { interactive?: boolean } } })?.engines
+        if (!cancelled) setClaudeInteractive(engines?.claude?.interactive === true)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
 
   // Load session data
   const loadSession = useCallback(async (id: string) => {
@@ -602,7 +620,13 @@ export function ChatPane({
 
       {/* Messages / CLI transcript */}
       {viewMode === 'cli' && sessionId ? (
-        <CliTranscript sessionId={sessionId} />
+        // Live xterm onto the interactive PTY when the gateway runs Claude in
+        // interactive mode; otherwise the poll-based transcript (headless `-p`).
+        claudeInteractive && (currentSession?.engine === 'claude' || !currentSession?.engine) ? (
+          <CliTerminal sessionId={sessionId} />
+        ) : (
+          <CliTranscript sessionId={sessionId} />
+        )
       ) : (sessionId || messages.length > 0) ? (
         <ChatMessages messages={messages} loading={loading} streamingText={streamingText} />
       ) : null}

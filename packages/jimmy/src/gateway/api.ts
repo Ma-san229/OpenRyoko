@@ -458,7 +458,10 @@ export async function handleApiRequest(
         port: config.gateway.port || 7777,
         engines: {
           default: config.engines.default,
-          claude: { model: config.engines.claude.model, available: true },
+          // `interactive` tells the web UI the Claude engine runs as a live PTY
+          // (cc_entrypoint=cli, Max-subsidized) — so the CLI view can attach the
+          // live xterm (/ws/pty) instead of the poll-based transcript.
+          claude: { model: config.engines.claude.model, available: true, interactive: config.engines.claude.interactive === true },
           codex: { model: config.engines.codex.model, available: true },
           ...(config.engines.gemini ? { gemini: { model: config.engines.gemini.model, available: true } } : {}),
         },

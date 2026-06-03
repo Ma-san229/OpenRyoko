@@ -9,13 +9,15 @@ import { WebSocketServer, type WebSocket } from "ws";
 import type { JinnConfig, Connector, Employee } from "../shared/types.js";
 import { loadConfig } from "../shared/config.js";
 import { configureLogger, logger } from "../shared/logger.js";
-import { initDb, recoverStaleSessions, recoverStaleQueueItems, getInterruptedSessions, listSessions, updateSession } from "../sessions/registry.js";
+import { initDb, recoverStaleSessions, recoverStaleQueueItems, getInterruptedSessions, listSessions, updateSession, getSession } from "../sessions/registry.js";
 import { SessionManager, type RouteOptions } from "../sessions/manager.js";
 import { ClaudeEngine } from "../engines/claude.js";
 import { CodexEngine } from "../engines/codex.js";
 import { GeminiEngine } from "../engines/gemini.js";
 import { InteractiveClaudeEngine } from "../engines/claude-interactive.js";
 import { PtyLifecycleManager } from "../engines/pty-lifecycle.js";
+import type { PtyViewEngine } from "../engines/pty-view-engine.js";
+import { attachPtyWebSocket } from "./pty-ws.js";
 import { HookRegistry } from "./hook-registry.js";
 import { writeGatewayInfo } from "./gateway-info.js";
 import { cleanupSessionSettings, seedTrust } from "../shared/claude-settings.js";
@@ -207,6 +209,12 @@ export async function startGateway(
   engines.set("claude", interactiveClaudeEngine ?? claudeEngine);
   engines.set("codex", codexEngine);
   engines.set("gemini", geminiEngine);
+
+  // PTY-capable engines keyed by engine name — the /ws/pty/:sessionId handler
+  // routes by session.engine so the live xterm CLI view attaches to the right one.
+  // Only the interactive Claude engine exposes a PTY; absent when interactive is off.
+  const ptyViewEngines: Record<string, PtyViewEngine> = {};
+  if (interactiveClaudeEngine) ptyViewEngines["claude"] = interactiveClaudeEngine;
 
   // Derive connector names from config
   const connectorNames: string[] = [];
@@ -943,6 +951,10 @@ export async function startGateway(
 
   // WebSocket server
   const wss = new WebSocketServer({ noServer: true });
+  // Dedicated WS server for per-session PTY streams (/ws/pty/:sessionId) — kept
+  // separate from the global broadcast `wss` so its sockets aren't added to the
+  // broadcast client set.
+  const ptyWss = new WebSocketServer({ noServer: true });
 
   wss.on("connection", (ws) => {
     wsClients.add(ws);
@@ -960,13 +972,28 @@ export async function startGateway(
   });
 
   server.on("upgrade", (req, socket, head) => {
-    if (req.url === "/ws") {
+    const reqUrl = req.url || "";
+    if (reqUrl === "/ws") {
       wss.handleUpgrade(req, socket, head, (ws) => {
         wss.emit("connection", ws, req);
       });
-    } else {
-      socket.destroy();
+      return;
     }
+    // Dedicated per-session PTY channel for the live xterm CLI view. Routes to the
+    // session's OWN engine — no claude fallback (codex/gemini have no PTY view, and
+    // the FE hides the CLI toggle for them, so this only refuses stragglers).
+    const ptyMatch = reqUrl.split("?")[0].match(/^\/ws\/pty\/([^/]+)$/);
+    if (ptyMatch) {
+      const sessionId = decodeURIComponent(ptyMatch[1]);
+      const ptySession = getSession(sessionId);
+      const ptyEngine = ptySession ? ptyViewEngines[ptySession.engine] : undefined;
+      if (!ptyEngine) { socket.destroy(); return; }
+      ptyWss.handleUpgrade(req, socket, head, (ws) => {
+        attachPtyWebSocket(ws, sessionId, ptyEngine);
+      });
+      return;
+    }
+    socket.destroy();
   });
 
 
