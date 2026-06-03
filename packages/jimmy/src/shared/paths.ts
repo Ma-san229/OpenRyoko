@@ -71,6 +71,15 @@ export const FILES_DIR = path.join(JINN_HOME, "files");
 export const MIGRATIONS_DIR = path.join(JINN_HOME, "migrations");
 export const TEMPLATE_MIGRATIONS_DIR = path.join(TEMPLATE_DIR, "migrations");
 
+// ---- Interactive Claude (PTY) engine: hook-relay + per-session --settings ----
+/** Gateway connection info (port + hook secret + pids) for hook-relay discovery. */
+export const GATEWAY_INFO_FILE = path.join(JINN_HOME, "gateway.json");
+/** Per-session Claude Code --settings files written for PTY turns. */
+export const CLAUDE_SETTINGS_DIR = path.join(JINN_HOME, "tmp", "settings");
+/** The hook-relay script copied next to JINN_HOME at boot; PTY-spawned Claude
+ *  invokes it from its hook config to POST turn events back to the gateway. */
+export const HOOK_RELAY_SCRIPT = path.join(JINN_HOME, "hook-relay.mjs");
+
 /**
  * Global instances registry — always at ~/.ryoko/instances.json regardless
  * of which instance is running, so every instance can discover the others.

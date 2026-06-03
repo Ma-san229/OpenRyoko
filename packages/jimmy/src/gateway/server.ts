@@ -3,7 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { randomUUID } from "node:crypto";
+import { randomUUID, randomBytes } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { JinnConfig, Connector, Employee } from "../shared/types.js";
 import { loadConfig } from "../shared/config.js";
@@ -13,6 +13,12 @@ import { SessionManager, type RouteOptions } from "../sessions/manager.js";
 import { ClaudeEngine } from "../engines/claude.js";
 import { CodexEngine } from "../engines/codex.js";
 import { GeminiEngine } from "../engines/gemini.js";
+import { InteractiveClaudeEngine } from "../engines/claude-interactive.js";
+import { PtyLifecycleManager } from "../engines/pty-lifecycle.js";
+import { HookRegistry } from "./hook-registry.js";
+import { writeGatewayInfo } from "./gateway-info.js";
+import { cleanupSessionSettings } from "../shared/claude-settings.js";
+import { GATEWAY_INFO_FILE, HOOK_RELAY_SCRIPT, CLAUDE_SETTINGS_DIR } from "../shared/paths.js";
 import { handleApiRequest, resumePendingWebQueueItems, type ApiContext } from "./api.js";
 import { ensureFilesDir } from "./files.js";
 import { initStt } from "../stt/stt.js";
@@ -29,6 +35,28 @@ import { scanOrg } from "./org.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+/** Copy the hook-relay.mjs asset next to JINN_HOME so PTY-spawned Claude (running
+ *  with our per-session --settings) can invoke it to POST turn hooks back to the
+ *  gateway. Tries dev (src) and built (dist) layouts. Best-effort: a failure only
+ *  degrades interactive turn resolution, which we log. */
+function copyHookRelayAsset(): void {
+  const candidates = [
+    path.join(__dirname, "..", "..", "..", "assets", "hook-relay.mjs"), // dev: src/gateway → packages/jimmy/assets
+    path.join(__dirname, "..", "..", "assets", "hook-relay.mjs"),       // built: dist/src/gateway → dist/assets
+    path.join(__dirname, "..", "assets", "hook-relay.mjs"),
+  ];
+  try {
+    const src = candidates.find((p) => fs.existsSync(p));
+    if (!src) {
+      logger.warn("hook-relay.mjs asset not found in any candidate location; interactive Claude hooks may not work");
+      return;
+    }
+    fs.copyFileSync(src, HOOK_RELAY_SCRIPT);
+  } catch (err) {
+    logger.warn(`Failed to copy hook-relay.mjs: ${err instanceof Error ? err.message : err}`);
+  }
+}
 
 const MIME_TYPES: Record<string, string> = {
   ".html": "text/html",
@@ -133,8 +161,36 @@ export async function startGateway(
   const claudeEngine = new ClaudeEngine();
   const codexEngine = new CodexEngine();
   const geminiEngine = new GeminiEngine();
-  const engines = new Map<string, InstanceType<typeof ClaudeEngine> | InstanceType<typeof CodexEngine> | InstanceType<typeof GeminiEngine>>();
-  engines.set("claude", claudeEngine);
+
+  // Interactive Claude (PTY) engine — opt-in via config.engines.claude.interactive.
+  // When enabled it REPLACES the headless `claude -p` engine under the "claude" key,
+  // so all existing engine-config / fallback / rate-limit logic keys on "claude"
+  // unchanged. It runs the genuine `claude` CLI in a PTY (no -p → cc_entrypoint=cli),
+  // which bills against the Max subscription instead of metered API usage. Turns are
+  // resolved via Claude Code Stop hooks relayed back through /api/internal/hook.
+  const useInteractiveClaude = config.engines?.claude?.interactive === true;
+  const hookSecret = randomBytes(24).toString("hex");
+  let hookRegistry: HookRegistry | undefined;
+  let claudeLifecycle: PtyLifecycleManager | undefined;
+  let interactiveClaudeEngine: InteractiveClaudeEngine | undefined;
+  if (useInteractiveClaude) {
+    hookRegistry = new HookRegistry();
+    claudeLifecycle = new PtyLifecycleManager({
+      maxLivePtys: config.engines?.claude?.maxLivePtys ?? 8,
+      onCleanup: (id) => {
+        hookRegistry?.unregister(id);
+        cleanupSessionSettings(CLAUDE_SETTINGS_DIR, id);
+      },
+    });
+    // Pass the headless engine as a remote fallback so sshHost employees still run
+    // over SSH (the local PTY can't), while local turns get the Max-subsidized PTY.
+    interactiveClaudeEngine = new InteractiveClaudeEngine(claudeLifecycle, hookRegistry, claudeEngine);
+    copyHookRelayAsset();
+    logger.info("Interactive Claude (PTY) engine enabled — Claude work turns run via PTY (Max-subsidized cc_entrypoint=cli)");
+  }
+
+  const engines = new Map<string, InstanceType<typeof ClaudeEngine> | InstanceType<typeof CodexEngine> | InstanceType<typeof GeminiEngine> | InteractiveClaudeEngine>();
+  engines.set("claude", interactiveClaudeEngine ?? claudeEngine);
   engines.set("codex", codexEngine);
   engines.set("gemini", geminiEngine);
 
@@ -771,6 +827,8 @@ export async function startGateway(
     reloadAllConnectors,
     suppressNextConnectorReload,
     clearSuppressNextConnectorReload,
+    hookRegistry,
+    hookSecret: useInteractiveClaude ? hookSecret : undefined,
   };
 
   // Replay any pending web queue items (e.g. gateway restart mid-run)
@@ -1011,6 +1069,16 @@ export async function startGateway(
     });
   });
 
+  // Publish gateway connection info (port + hook secret + pid) so hook-relay.mjs —
+  // spawned by the interactive Claude PTY — can discover where to POST turn hooks.
+  if (useInteractiveClaude) {
+    try {
+      writeGatewayInfo(GATEWAY_INFO_FILE, { port, pid: process.pid, secret: hookSecret });
+    } catch (err) {
+      logger.warn(`Failed to write ${GATEWAY_INFO_FILE}: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
   // Notify connected WebSocket clients about interrupted sessions available for resume
   if (resumable.length > 0) {
     // Small delay to let WebSocket clients connect after server starts
@@ -1067,6 +1135,12 @@ export async function startGateway(
 
     // Terminate live engine subprocesses after marking sessions.
     claudeEngine.killAll();
+    interactiveClaudeEngine?.killAll();
+    claudeLifecycle?.dispose();
+    try { hookRegistry?.dispose(); } catch { /* best effort */ }
+    if (useInteractiveClaude) {
+      try { fs.rmSync(GATEWAY_INFO_FILE, { force: true }); } catch { /* best effort */ }
+    }
     codexEngine.killAll();
 
     // Stop cron scheduler

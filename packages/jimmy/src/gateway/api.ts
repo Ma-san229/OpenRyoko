@@ -41,6 +41,7 @@ import {
 import { logger } from "../shared/logger.js";
 import { getSttStatus, downloadModel, transcribe as sttTranscribe, resolveLanguages, WHISPER_LANGUAGES } from "../stt/stt.js";
 import { JINN_HOME } from "../shared/paths.js";
+import { handleHookPost, LOOPBACK as HOOK_LOOPBACK } from "./hook-endpoint.js";
 import { resolveEffort } from "../shared/effort.js";
 import { computeNextRetryDelayMs, computeRateLimitDeadlineMs, detectRateLimit } from "../shared/rateLimit.js";
 import { getClaudeExpectedResetAt, recordClaudeRateLimit } from "../shared/usageAwareness.js";
@@ -52,6 +53,9 @@ import { WhatsAppConnector } from "../connectors/whatsapp/index.js";
 import { handleFilesRequest, ensureFilesDir } from "./files.js";
 import { notifyParentSession, notifyRateLimited, notifyRateLimitResumed, notifyDiscordChannel } from "../sessions/callbacks.js";
 import { loadInstances } from "../cli/instances.js";
+
+/** Max bytes accepted on /api/internal/hook (loopback-only relay payloads are tiny). */
+const HOOK_BODY_MAX_BYTES = 64 * 1024;
 
 export interface ApiContext {
   config: JinnConfig;
@@ -81,6 +85,14 @@ export interface ApiContext {
    * instead of being permanently silenced for the next event.
    */
   clearSuppressNextConnectorReload?: () => void;
+  /**
+   * Hook registry + shared secret for the interactive Claude (PTY) engine. Only
+   * set when the interactive engine is active (config.engines.claude.interactive).
+   * The /api/internal/hook route delivers Claude Code turn hooks (relayed by
+   * hook-relay.mjs) into this registry to resolve in-flight PTY turns.
+   */
+  hookRegistry?: import("./hook-registry.js").HookRegistry;
+  hookSecret?: string;
 }
 
 export function resumePendingWebQueueItems(context: ApiContext): void {
@@ -354,6 +366,50 @@ export async function handleApiRequest(
   const method = req.method || "GET";
 
   try {
+    // POST /api/internal/hook — receive Claude Code turn hooks from hook-relay.mjs
+    // (interactive PTY engine). Loopback-only + shared-secret authenticated.
+    if (method === "POST" && pathname === "/api/internal/hook") {
+      if (!context.hookRegistry || !context.hookSecret) {
+        return json(res, { error: "Interactive mode not active" }, 503);
+      }
+      // Loopback check FIRST — before reading the body — so a non-loopback
+      // caller can't force unbounded body buffering by sending a huge POST.
+      const remote = req.socket.remoteAddress;
+      if (!remote || !HOOK_LOOPBACK.has(remote)) {
+        return json(res, { message: "forbidden" }, 403);
+      }
+      // Reject oversized bodies up front via Content-Length.
+      const contentLength = Number(req.headers["content-length"] ?? NaN);
+      if (Number.isFinite(contentLength) && contentLength > HOOK_BODY_MAX_BYTES) {
+        return json(res, { error: "Payload too large" }, 413);
+      }
+      const parsed = await readJsonBody(req, res);
+      if (!parsed.ok) return;
+      const hookBody = parsed.body as { jinnSessionId?: string; hook?: import("./hook-registry.js").HookPayload };
+      const result = handleHookPost(
+        { reg: context.hookRegistry, secret: context.hookSecret, remoteAddress: remote },
+        req.headers["x-jinn-hook-secret"] as string | undefined,
+        hookBody,
+      );
+      // Central engineSessionId capture: persist Claude's OWN session id the moment
+      // it reports one (SessionStart, or Stop as backup), independent of turn state.
+      // Without this, an interrupted turn or idle CLI-view spawn never persisted the
+      // id, so the next cold respawn ran `claude` with resume:none → a fresh convo.
+      if (
+        result.status === 200 &&
+        hookBody.jinnSessionId &&
+        (hookBody.hook?.hook_event_name === "SessionStart" || hookBody.hook?.hook_event_name === "Stop") &&
+        typeof hookBody.hook?.session_id === "string" &&
+        hookBody.hook.session_id
+      ) {
+        const existing = getSession(hookBody.jinnSessionId);
+        if (existing && existing.engineSessionId !== hookBody.hook.session_id) {
+          updateSession(hookBody.jinnSessionId, { engineSessionId: hookBody.hook.session_id });
+        }
+      }
+      return json(res, { ok: result.status === 200 }, result.status);
+    }
+
     // GET /api/status
     if (method === "GET" && pathname === "/api/status") {
       const config = context.getConfig();

@@ -1,10 +1,14 @@
-export type StreamDeltaType = "text" | "text_snapshot" | "tool_use" | "tool_result" | "status" | "error";
+export type StreamDeltaType = "text" | "text_snapshot" | "tool_use" | "tool_result" | "status" | "error" | "context";
 
 export interface StreamDelta {
   type: StreamDeltaType;
   content: string;
   toolName?: string;
   toolId?: string;
+  /** Set when this delta belongs to a Task sub-agent (interactive PTY engine).
+   *  The chat pane routes tagged deltas into a collapsible sub-agent card instead
+   *  of the main transcript. Absent for main-agent deltas. */
+  subAgent?: { id: string; label?: string };
 }
 
 export interface Engine {
@@ -462,7 +466,18 @@ export interface JinnConfig {
   gateway: { port: number; host: string; streaming?: boolean };
   engines: {
     default: "claude" | "codex" | "gemini";
-    claude: { bin: string; model: string; effortLevel?: string; childEffortOverride?: string };
+    claude: {
+      bin: string;
+      model: string;
+      effortLevel?: string;
+      childEffortOverride?: string;
+      /** Opt-in: run Claude as an interactive PTY (cc_entrypoint=cli → Max-subscription
+       *  billing) instead of headless `claude -p`. Replaces the engine under the "claude"
+       *  key when true. Default false (headless `-p`). */
+      interactive?: boolean;
+      /** Max simultaneously-live PTYs for the interactive engine (LRU-evicted). Default 8. */
+      maxLivePtys?: number;
+    };
     codex: { bin: string; model: string; effortLevel?: string; childEffortOverride?: string };
     gemini?: { bin: string; model: string; effortLevel?: string; childEffortOverride?: string };
   };
