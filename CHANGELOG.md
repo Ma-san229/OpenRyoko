@@ -2,6 +2,26 @@
 
 > **バージョン体系について**: 2026.4.26 から日付ベース (`YYYY.M.D`) のCalVerに移行しました。npm semver の制約上、月・日の leading zero は付けません (例: 4月26日 → `2026.4.26`)。
 
+## [2026.6.3] - 2026-06-03
+
+本家 jinn の engine sprint からの移植 + 独自堅牢化。
+
+### Features
+- **Interactive Claude PTY エンジン（オプトイン）**: `config.engines.claude.interactive: true` で、Claude の作業ターンを headless `claude -p`（API 従量課金）ではなく**インタラクティブ PTY**（`cc_entrypoint=cli`）で実行。Max サブスクリプション課金になり API 課金を回避します。ターン解決は Claude Code の Stop フックを per-session `--settings` で登録し、`hook-relay.mjs` が loopback の `POST /api/internal/hook`（secret 認証）へ転送 → `HookRegistry` → `TurnResolver` で解決。既定は従来の `claude -p`。`sshHost` 従業員は PTY 不可のため headless `-p` フォールバックへ委譲。新規依存 `node-pty`。
+- **ライブ xterm CLI ビュー**: `/ws/pty/:sessionId` WebSocket でセッションの PTY をブラウザの xterm に直結（`@xterm/xterm`）。`/api/status` の `engines.claude.interactive` で UI が live xterm / poll transcript を切替。
+- **コンテキストメーター**: codex / claude 両エンジンで直近ターンの入力コンテキスト量（input + cache）を計測・永続化（`sessions.last_context_tokens`）し、Web にバッジ表示。
+
+### Fixes
+- **Slack リアクション承認（古いメッセージ）**: boot-replay ガードをリアクションの `event_ts` で判定するよう変更し、数時間待った承認カードへの新規リアクションが落ちる問題を解消。`:eyes:` 即時 ack を追加（本家 v0.17.1 相当）。
+
+### Hardening / Security
+- Interactive エンジンに**ターンタイムアウト**（既定 15 分, `interactiveTurnTimeoutMs`）を追加し、ハングした PTY がセッションをゾンビ化しないように。
+- 起動時に `seedTrust(~/.claude.json, JINN_HOME)` で PTY 起動 claude の trust ダイアログを回避。
+- `/ws` / `/ws/pty` の upgrade に host ガード、`/ws/pty` に Origin allowlist（stdin 注入対策）、sessionId の `decodeURIComponent` を try/catch 化。
+
+### Tests
+- jimmy: 442 tests pass（PTY ライフサイクル / hook registry+endpoint / SSE proxy / claude-interactive / SSH フォールバック / claude-settings 等を移植・追加）。
+
 ## [2026.5.29] - 2026-05-29
 
 ### Features
