@@ -550,5 +550,14 @@ export async function runSetup(opts?: { force?: boolean }): Promise<void> {
     }
   }
 
+  // Offer the interactive (PTY, Max-subsidized) Claude engine. config.yaml now
+  // exists; promptInteractive() is a no-op outside a TTY and when already decided.
+  try {
+    const { promptInteractive } = await import("./interactive-config.js");
+    await promptInteractive();
+  } catch {
+    /* best-effort — never block setup on the optional prompt */
+  }
+
   console.log(`\n${GREEN}セットアップ完了。${RESET} ${DIM}ryoko start${RESET} でゲートウェイを起動できます。\n`);
 }

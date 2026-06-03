@@ -53,6 +53,18 @@ export async function runUpdate(opts: {
     console.log(`Run ${DIM}ryoko setup${RESET} to create one.\n`);
   }
 
+  // Offer the interactive (PTY, Max-subsidized) engine on first update after it
+  // became available — only in a TTY, only when the user hasn't decided yet.
+  // Must run BEFORE the restart so the choice is picked up by the new gateway.
+  if (fs.existsSync(JINN_HOME)) {
+    try {
+      const { promptInteractive } = await import("./interactive-config.js");
+      await promptInteractive();
+    } catch (err) {
+      console.error(`${YELLOW}interactive 設定のプロンプトをスキップしました:${RESET} ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
   if (opts.restart) {
     console.log(`\n${YELLOW}Restarting gateway...${RESET}`);
     try {

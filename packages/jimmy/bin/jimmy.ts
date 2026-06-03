@@ -166,6 +166,21 @@ program
     });
 }
 
+// Configサブコマンド（ryoko config interactive [on|off]）
+{
+  const configCmd = program
+    .command("config")
+    .description("config.yaml の設定を確認・変更する");
+
+  configCmd
+    .command("interactive [value]")
+    .description("Claude のインタラクティブPTY（Max定額課金）の on/off。値なしで現在値を表示")
+    .action(async (value?: string) => {
+      const { runConfigInteractive } = await import("../src/cli/config.js");
+      await runConfigInteractive(value);
+    });
+}
+
 program
   .command("chrome-allow")
   .description("Claude Chrome拡張で全サイトを事前承認する")
