@@ -243,6 +243,14 @@ export function ChatPane({
             },
           ])
         }
+        // Refresh session meta (e.g. context-meter tokens) without reloading the
+        // message history — the turn just persisted lastContextTokens server-side.
+        if (completedSessionId) {
+          api
+            .getSession(completedSessionId)
+            .then((s) => setCurrentSession(s as Record<string, unknown>))
+            .catch(() => {})
+        }
         onRefresh?.()
       }
     })

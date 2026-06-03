@@ -593,6 +593,7 @@ export class SessionManager {
               transportMeta: mergeTransportMeta(getSessionBySessionKey(msg.sessionKey)?.transportMeta ?? session.transportMeta, msg.transportMeta),
               lastActivity: new Date().toISOString(),
               lastError: fallbackResult.error ?? null,
+              ...(typeof fallbackResult.contextTokens === "number" ? { lastContextTokens: fallbackResult.contextTokens } : {}),
             });
             if (updated) {
               notifyParentSession(updated, { result: fallbackResult.result, error: fallbackResult.error ?? null, cost: fallbackResult.cost, durationMs: fallbackResult.durationMs }, { alwaysNotify: employee?.alwaysNotify });
@@ -756,6 +757,7 @@ export class SessionManager {
               transportMeta: msg.transportMeta ?? null,
               lastActivity: new Date().toISOString(),
               lastError: retryResult.error ?? null,
+              ...(typeof retryResult.contextTokens === "number" ? { lastContextTokens: retryResult.contextTokens } : {}),
             });
             if (retryUpdated) {
               notifyRateLimitResumed(retryUpdated);

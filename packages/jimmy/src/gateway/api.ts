@@ -2352,6 +2352,7 @@ async function runWebSession(
             status: fallbackResult.error ? "error" : "idle",
             lastActivity: new Date().toISOString(),
             lastError: fallbackResult.error ?? null,
+            ...(typeof fallbackResult.contextTokens === "number" ? { lastContextTokens: fallbackResult.contextTokens } : {}),
           });
           if (completedFallback) {
             notifyParentSession(completedFallback, { result: fallbackResult.result, error: fallbackResult.error ?? null, cost: fallbackResult.cost, durationMs: fallbackResult.durationMs }, { alwaysNotify: employee?.alwaysNotify });
@@ -2496,6 +2497,7 @@ async function runWebSession(
             status: retryResult.error ? "error" : "idle",
             lastActivity: new Date().toISOString(),
             lastError: retryResult.error ?? null,
+            ...(typeof retryResult.contextTokens === "number" ? { lastContextTokens: retryResult.contextTokens } : {}),
           });
 
           if (completedAfterRetry) {
@@ -2554,6 +2556,7 @@ async function runWebSession(
       status: result.error ? "error" : "idle",
       lastActivity: new Date().toISOString(),
       lastError: result.error ?? null,
+      ...(typeof result.contextTokens === "number" ? { lastContextTokens: result.contextTokens } : {}),
     });
     if (syncRequested && !rateLimit.limited && !wasInterrupted) {
       const meta = (getSession(currentSession.id)?.transportMeta || currentSession.transportMeta || {}) as Record<string, unknown>;
