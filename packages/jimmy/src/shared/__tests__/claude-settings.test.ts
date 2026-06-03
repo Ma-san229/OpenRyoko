@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { buildSessionSettings } from "../claude-settings.js";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { buildSessionSettings, seedTrust } from "../claude-settings.js";
 
 describe("buildSessionSettings", () => {
   it("registers SessionStart/Stop/StopFailure/PreToolUse/PostToolUse hooks", () => {
@@ -36,5 +39,24 @@ describe("buildSessionSettings", () => {
     expect(without.appendSystemPrompt).toBeUndefined();
     const withPrompt = buildSessionSettings({ sessionId: "a", relayScript: "/r.mjs", appendSystemPrompt: "be terse" });
     expect(withPrompt.appendSystemPrompt).toBe("be terse");
+  });
+});
+
+describe("seedTrust", () => {
+  it("marks a project dir trusted in ~/.claude.json and is idempotent", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seedtrust-"));
+    const claudeJson = path.join(dir, ".claude.json");
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "proj-"));
+    try {
+      seedTrust(claudeJson, projectDir);
+      seedTrust(claudeJson, projectDir); // idempotent — must not throw or duplicate
+      const data = JSON.parse(fs.readFileSync(claudeJson, "utf-8"));
+      const real = fs.realpathSync(projectDir);
+      expect(data.projects[real].hasTrustDialogAccepted).toBe(true);
+      expect(data.projects[real].hasCompletedProjectOnboarding).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(projectDir, { recursive: true, force: true });
+    }
   });
 });

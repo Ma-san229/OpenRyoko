@@ -1,6 +1,7 @@
 import http from "node:http";
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID, randomBytes } from "node:crypto";
@@ -17,8 +18,8 @@ import { InteractiveClaudeEngine } from "../engines/claude-interactive.js";
 import { PtyLifecycleManager } from "../engines/pty-lifecycle.js";
 import { HookRegistry } from "./hook-registry.js";
 import { writeGatewayInfo } from "./gateway-info.js";
-import { cleanupSessionSettings } from "../shared/claude-settings.js";
-import { GATEWAY_INFO_FILE, HOOK_RELAY_SCRIPT, CLAUDE_SETTINGS_DIR } from "../shared/paths.js";
+import { cleanupSessionSettings, seedTrust } from "../shared/claude-settings.js";
+import { GATEWAY_INFO_FILE, HOOK_RELAY_SCRIPT, CLAUDE_SETTINGS_DIR, JINN_HOME } from "../shared/paths.js";
 import { handleApiRequest, resumePendingWebQueueItems, type ApiContext } from "./api.js";
 import { ensureFilesDir } from "./files.js";
 import { initStt } from "../stt/stt.js";
@@ -186,6 +187,14 @@ export async function startGateway(
     // over SSH (the local PTY can't), while local turns get the Max-subsidized PTY.
     interactiveClaudeEngine = new InteractiveClaudeEngine(claudeLifecycle, hookRegistry, claudeEngine);
     copyHookRelayAsset();
+    // Pre-trust JINN_HOME in the real ~/.claude.json so PTY-spawned Claude (cwd =
+    // JINN_HOME) doesn't block every turn on the interactive "trust this folder?"
+    // dialog — which has no Stop hook, so the turn would hang forever.
+    try {
+      seedTrust(path.join(os.homedir(), ".claude.json"), JINN_HOME);
+    } catch (err) {
+      logger.warn(`seedTrust failed for ${JINN_HOME}: ${err instanceof Error ? err.message : err}`);
+    }
     logger.info("Interactive Claude (PTY) engine enabled — Claude work turns run via PTY (Max-subsidized cc_entrypoint=cli)");
   }
 
