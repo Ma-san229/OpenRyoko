@@ -32,30 +32,56 @@ export function getInteractiveSetting(): boolean | undefined {
 export function setInteractiveSetting(enabled: boolean): boolean {
   const raw = fs.readFileSync(CONFIG_PATH, "utf-8");
   const lines = raw.split("\n");
+  const indentOf = (l: string) => (l.match(/^(\s*)/)?.[1].length) ?? 0;
 
-  // 1) An existing LIVE line — flip its value in place (keep any trailing comment).
-  const liveIdx = lines.findIndex((l) => /^\s*interactive:\s*(true|false)\s*(#.*)?$/.test(l));
-  if (liveIdx >= 0) {
-    const next = lines[liveIdx].replace(/interactive:\s*(true|false)/, `interactive: ${enabled}`);
-    if (next === lines[liveIdx]) return false;
-    lines[liveIdx] = next;
-    fs.writeFileSync(CONFIG_PATH, lines.join("\n"), "utf-8");
-    return true;
+  // Locate the engines.claude block STRUCTURALLY so a stray `interactive:` in
+  // another engine/section can't be matched (Codex review). engines: at col 0;
+  // claude: is its 2-space child; the block runs until the next line indented
+  // back to ≤ claude's indent (a sibling key) or column 0.
+  const enginesIdx = lines.findIndex((l) => /^engines:\s*(#.*)?$/.test(l));
+  if (enginesIdx < 0) throw new Error("engines block not found in config.yaml");
+
+  let claudeIdx = -1;
+  for (let i = enginesIdx + 1; i < lines.length; i++) {
+    if (lines[i].trim() === "") continue;
+    if (indentOf(lines[i]) === 0) break; // left the engines block
+    if (/^\s{2}claude:\s*(#.*)?$/.test(lines[i])) { claudeIdx = i; break; }
   }
-
-  // 2) A COMMENTED hint (template default) — uncomment + set, preserving indent.
-  const commentedIdx = lines.findIndex((l) => /^\s*#\s*interactive:\s*(true|false)\s*$/.test(l));
-  if (commentedIdx >= 0) {
-    const indent = lines[commentedIdx].match(/^(\s*)/)?.[1] ?? "    ";
-    lines[commentedIdx] = `${indent}interactive: ${enabled}`;
-    fs.writeFileSync(CONFIG_PATH, lines.join("\n"), "utf-8");
-    return true;
-  }
-
-  // 3) Neither present — insert under the `  claude:` block (2-space nesting).
-  const claudeIdx = lines.findIndex((l) => /^\s{2}claude:\s*$/.test(l));
   if (claudeIdx < 0) throw new Error("engines.claude block not found in config.yaml");
-  lines.splice(claudeIdx + 1, 0, `    interactive: ${enabled}`);
+
+  const claudeIndent = indentOf(lines[claudeIdx]);
+  let blockEnd = lines.length;
+  for (let i = claudeIdx + 1; i < lines.length; i++) {
+    if (lines[i].trim() === "") continue;
+    if (indentOf(lines[i]) <= claudeIndent) { blockEnd = i; break; }
+  }
+  const childIndent = " ".repeat(claudeIndent + 2);
+
+  // 1) LIVE `interactive:` inside the claude block — replace the value token,
+  //    keeping any trailing comment. Matches any value form (true/false/on/off/…).
+  for (let i = claudeIdx + 1; i < blockEnd; i++) {
+    if (/^\s*#/.test(lines[i])) continue;
+    if (/^\s*interactive:\s*\S/.test(lines[i])) {
+      const next = lines[i].replace(/(interactive:\s*)\S+/, `$1${enabled}`);
+      if (next === lines[i]) return false;
+      lines[i] = next;
+      fs.writeFileSync(CONFIG_PATH, lines.join("\n"), "utf-8");
+      return true;
+    }
+  }
+
+  // 2) COMMENTED hint inside the block — uncomment + set, keep indent + trailing comment.
+  for (let i = claudeIdx + 1; i < blockEnd; i++) {
+    const m = lines[i].match(/^(\s*)#\s*interactive:\s*\S+(\s*#.*)?$/);
+    if (m) {
+      lines[i] = `${m[1]}interactive: ${enabled}${m[2] ?? ""}`;
+      fs.writeFileSync(CONFIG_PATH, lines.join("\n"), "utf-8");
+      return true;
+    }
+  }
+
+  // 3) Absent — insert as the first child of the claude block at the child indent.
+  lines.splice(claudeIdx + 1, 0, `${childIndent}interactive: ${enabled}`);
   fs.writeFileSync(CONFIG_PATH, lines.join("\n"), "utf-8");
   return true;
 }
@@ -82,7 +108,8 @@ function askYesNo(question: string, defaultYes: boolean): Promise<boolean> {
  *   `{ force: true }` to re-ask even when already set (e.g. fresh `ryoko setup`).
  */
 export async function promptInteractive(opts: { force?: boolean } = {}): Promise<void> {
-  if (!process.stdin.isTTY) return;
+  // Never prompt in automation: no TTY, or a CI runner that allocated a fake one.
+  if (!process.stdin.isTTY || process.env.CI) return;
   const current = getInteractiveSetting();
   if (!opts.force && current !== undefined) return;
 

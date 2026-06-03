@@ -24,7 +24,7 @@ export async function runConfigInteractive(value?: string): Promise<void> {
     return;
   }
 
-  const v = value.toLowerCase();
+  const v = value.trim().toLowerCase();
   const enabled = ON_VALUES.has(v) ? true : OFF_VALUES.has(v) ? false : null;
   if (enabled === null) {
     console.error(`${RED}不正な値: ${value}${RESET}（on / off）`);

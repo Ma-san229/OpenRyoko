@@ -97,4 +97,39 @@ describe("interactive-config", () => {
     expect(occurrences.length).toBe(1);
     expect(getInteractiveSetting()).toBe(true);
   });
+
+  it("scopes to engines.claude — a stray interactive: elsewhere is untouched", () => {
+    const stray = `engines:
+  default: claude
+  claude:
+    bin: claude
+    model: opus
+  codex:
+    bin: codex
+    interactive: true
+`;
+    writeConfig(stray);
+    expect(setInteractiveSetting(true)).toBe(true);
+    const out = fs.readFileSync(TEST_CONFIG, "utf-8");
+    // claude got its own key inserted; the codex stray line is left as-is.
+    expect(out).toMatch(/^ {2}claude:\n {4}interactive: true$/m);
+    const codexBlock = out.slice(out.indexOf("  codex:"));
+    expect(codexBlock).toContain("interactive: true"); // unchanged
+    expect((out.match(/^\s*interactive:/gm) || []).length).toBe(2);
+  });
+
+  it("handles a claude: line with a trailing comment for insertion", () => {
+    writeConfig(BASE.replace("  claude:\n", "  claude: # the main engine\n"));
+    expect(setInteractiveSetting(true)).toBe(true);
+    const out = fs.readFileSync(TEST_CONFIG, "utf-8");
+    expect(out).toMatch(/^ {2}claude: # the main engine\n {4}interactive: true$/m);
+  });
+
+  it("flips a non-true/false YAML boolean value form", () => {
+    writeConfig(BASE.replace("    model: opus\n", "    model: opus\n    interactive: off\n"));
+    expect(setInteractiveSetting(true)).toBe(true);
+    const out = fs.readFileSync(TEST_CONFIG, "utf-8");
+    expect(out).toMatch(/^ {4}interactive: true$/m);
+    expect((out.match(/^\s*interactive:/gm) || []).length).toBe(1);
+  });
 });
