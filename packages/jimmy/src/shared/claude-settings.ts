@@ -10,6 +10,13 @@ export interface SessionSettingsOpts {
 interface HookCommand { type: "command"; command: string; }
 interface HookMatcher { hooks: HookCommand[]; }
 
+/** POSIX single-quote a string so a path with spaces or shell metacharacters in
+ *  JINN_HOME (e.g. "/Users/My User/.ryoko") can't break or inject into the hook
+ *  command, which Claude Code runs through a shell. */
+function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
 // StopFailure fires INSTEAD of Stop when an API error ends the turn (rate_limit,
 // billing_error, server_error, …) — confirmed by the Phase 0 spike. It is the
 // structured rate-limit signal, so it must be registered alongside Stop.
@@ -21,8 +28,9 @@ export interface ClaudeSettings {
 export function buildSessionSettings(opts: SessionSettingsOpts): ClaudeSettings {
   // Relay is invoked as: node <relayScript> <jinnSessionId>
   // It reads the hook JSON on stdin and POSTs to the gateway.
+  const command = `node ${shellQuote(opts.relayScript)} ${shellQuote(opts.sessionId)}`;
   const cmd = (): HookMatcher => ({
-    hooks: [{ type: "command", command: `node ${opts.relayScript} ${opts.sessionId}` }],
+    hooks: [{ type: "command", command }],
   });
   return {
     hooks: {

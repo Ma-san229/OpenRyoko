@@ -20,10 +20,24 @@ Codex がレビュー→実装まで完結できるよう、ファイル単位�
 | 4 | COO 静的ベース廃止 → CLAUDE.md/AGENTS.md 自動取り込み | 即取り込み | ⏳ 設計のみ | Codex |
 | 5 | Web 双方向ファイル/画像添付 + 添付API + 不変キャッシュ (v0.16.0) | 価値高 | ⏳ 設計のみ | Codex |
 | 6 | サブエージェントカード (live sub-agent cards) | 価値高 | ⏳ 設計のみ | Codex |
-| 7 | Interactive Claude PTY エンジン（Max定額課金） | 即取り込み（最大価値） | ⏳ 設計のみ | Codex |
+| 7 | Interactive Claude PTY エンジン（Max定額課金） | 即取り込み（最大価値） | ✅ Phase 1 実装済み（CLI xterm view は Phase 2 残） | Claude |
 
-> #1, #2 は本ブランチ `feat/upstream-port-context-meter-slack-fix` で適用済み。
-> #3〜#7 は本書の手順に沿って Codex が段階実装する。
+> #1, #2, #7(Phase1) は本ブランチ `feat/upstream-port-context-meter-slack-fix` で適用済み。
+> #3〜#6 は本書の手順に沿って Codex が段階実装する。
+
+### #7 Phase 1 実装内容（コミット 3b0e65e）
+- 新規(self-contained 移植): `engines/{pty-lifecycle,pty-view-engine,sse-pty-proxy,claude-interactive}.ts`、`gateway/{hook-registry,hook-endpoint,gateway-info}.ts`、`shared/{claude-settings,skill-commands}.ts`、`assets/hook-relay.mjs`
+- 配線: `api.ts` に loopback-only `/api/internal/hook` + ApiContext(hookRegistry/hookSecret)、`server.ts` でオプトイン登録 + gateway.json(port+secret) 書込 + シャットダウン dispose、`shared/types.ts` の StreamDelta に `context` 型 + `subAgent` 追加、`package.json` に node-pty(+onlyBuiltDependencies)
+- オプトイン: `config.engines.claude.interactive`（default false = 従来の `claude -p`）。true 時のみ "claude" キーのエンジンを差し替え
+- OpenRyoko独自: `sshHost` ターンは headless `claude -p` フォールバックへ委譲（ローカルPTYはリモート実行不可）。kill/isAlive/killAll も委譲
+- テスト: 本家8本移植 + SSHフォールバック4本。計 432 green、tsc クリーン
+
+### #7 Phase 2（残作業 — CLI xterm view）
+PTY を Web ダッシュボードの xterm ビューに繋ぐ部分。コスト改善の本命ではないため後続。
+- `gateway/pty-ws.ts`（`/ws/pty/:sessionId` WebSocket）— エンジンの `PtyViewEngine` メソッド(subscribeOutput/getScrollback/setViewing/writeStdin/resizePty/ensureIdleSpawn)は実装済みなので接続するだけ
+- Next.js 側の `CliTerminal`（xterm.js）コンポーネント + ビュー切替
+- サブエージェントカードUI（#6 と統合）— StreamDelta の `subAgent` タグは既に流れる
+- `updateGatewayPtyPids` による PTY pid の gateway.json 追記（プロセス管理用）
 
 ---
 

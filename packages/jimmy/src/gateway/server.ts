@@ -831,8 +831,10 @@ export async function startGateway(
     hookSecret: useInteractiveClaude ? hookSecret : undefined,
   };
 
-  // Replay any pending web queue items (e.g. gateway restart mid-run)
-  resumePendingWebQueueItems(apiContext);
+  // NOTE: replaying pending web queue items is deferred until AFTER the server is
+  // listening and gateway.json (port + hook secret) has been written — otherwise an
+  // interactive (PTY) recovery turn could spawn before hook-relay.mjs can discover
+  // the gateway, leaving its Stop hook undeliverable and the turn hung.
 
   // Resolve web UI directory — bundled into dist/web/ by postbuild script
   // At runtime __dirname is dist/src/gateway/, so ../../web resolves to dist/web/
@@ -1079,6 +1081,11 @@ export async function startGateway(
     }
   }
 
+  // Replay any pending web queue items (e.g. gateway restart mid-run). Deferred to
+  // here so the server is listening and gateway.json exists before any interactive
+  // recovery turn spawns — so hook-relay.mjs can deliver its Stop hook.
+  resumePendingWebQueueItems(apiContext);
+
   // Notify connected WebSocket clients about interrupted sessions available for resume
   if (resumable.length > 0) {
     // Small delay to let WebSocket clients connect after server starts
@@ -1133,13 +1140,16 @@ export async function startGateway(
       logger.info(`Marked session ${session.id} as interrupted for resume`);
     }
 
-    // Terminate live engine subprocesses after marking sessions.
-    claudeEngine.killAll();
-    interactiveClaudeEngine?.killAll();
-    claudeLifecycle?.dispose();
-    try { hookRegistry?.dispose(); } catch { /* best effort */ }
-    if (useInteractiveClaude) {
+    // Terminate live engine subprocesses after marking sessions. When interactive
+    // is active, interactiveClaudeEngine.killAll() also kills its headless fallback
+    // (the same claudeEngine), so call only one to avoid a redundant double-kill.
+    if (interactiveClaudeEngine) {
+      interactiveClaudeEngine.killAll();
+      claudeLifecycle?.dispose();
+      try { hookRegistry?.dispose(); } catch { /* best effort */ }
       try { fs.rmSync(GATEWAY_INFO_FILE, { force: true }); } catch { /* best effort */ }
+    } else {
+      claudeEngine.killAll();
     }
     codexEngine.killAll();
 

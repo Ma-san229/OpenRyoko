@@ -211,6 +211,34 @@ function dispatchWebSessionRun(
   }
 }
 
+/** Read a request body but abort once it exceeds `maxBytes` — guards loopback-only
+ *  endpoints (e.g. /api/internal/hook) against unbounded buffering when no (or a
+ *  lying) Content-Length is sent. Resolves `{ ok:false }` after destroying the
+ *  socket; the caller must already have sent no response. */
+function readBodyBounded(req: HttpRequest, maxBytes: number): Promise<{ ok: true; raw: string } | { ok: false }> {
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let done = false;
+    const finish = (r: { ok: true; raw: string } | { ok: false }) => {
+      if (done) return;
+      done = true;
+      resolve(r);
+    };
+    req.on("data", (chunk: Buffer) => {
+      total += chunk.length;
+      if (total > maxBytes) {
+        try { req.destroy(); } catch { /* already gone */ }
+        finish({ ok: false });
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => finish({ ok: true, raw: Buffer.concat(chunks).toString() }));
+    req.on("error", () => finish({ ok: false }));
+  });
+}
+
 function readBody(req: HttpRequest): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -378,14 +406,20 @@ export async function handleApiRequest(
       if (!remote || !HOOK_LOOPBACK.has(remote)) {
         return json(res, { message: "forbidden" }, 403);
       }
-      // Reject oversized bodies up front via Content-Length.
+      // Reject oversized bodies up front via Content-Length, then enforce the cap
+      // mid-stream too (chunked / missing / lying Content-Length can't bypass it).
       const contentLength = Number(req.headers["content-length"] ?? NaN);
       if (Number.isFinite(contentLength) && contentLength > HOOK_BODY_MAX_BYTES) {
         return json(res, { error: "Payload too large" }, 413);
       }
-      const parsed = await readJsonBody(req, res);
-      if (!parsed.ok) return;
-      const hookBody = parsed.body as { jinnSessionId?: string; hook?: import("./hook-registry.js").HookPayload };
+      const bounded = await readBodyBounded(req, HOOK_BODY_MAX_BYTES);
+      if (!bounded.ok) return json(res, { error: "Payload too large" }, 413);
+      let hookBody: { jinnSessionId?: string; hook?: import("./hook-registry.js").HookPayload };
+      try {
+        hookBody = JSON.parse(bounded.raw);
+      } catch {
+        return json(res, { error: "Invalid JSON" }, 400);
+      }
       const result = handleHookPost(
         { reg: context.hookRegistry, secret: context.hookSecret, remoteAddress: remote },
         req.headers["x-jinn-hook-secret"] as string | undefined,
@@ -2294,6 +2328,8 @@ async function runWebSession(
             type: delta.type,
             content: delta.content,
             toolName: delta.toolName,
+            toolId: delta.toolId,
+            subAgent: delta.subAgent,
           });
         } catch (err) {
           logger.warn(`Failed to emit stream delta for session ${currentSession.id}: ${err instanceof Error ? err.message : err}`);
@@ -2386,6 +2422,8 @@ async function runWebSession(
                 type: delta.type,
                 content: delta.content,
                 toolName: delta.toolName,
+                toolId: delta.toolId,
+                subAgent: delta.subAgent,
               });
             },
           });
@@ -2517,6 +2555,8 @@ async function runWebSession(
                 type: delta.type,
                 content: delta.content,
                 toolName: delta.toolName,
+                toolId: delta.toolId,
+                subAgent: delta.subAgent,
               });
             },
           });
