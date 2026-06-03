@@ -25,8 +25,10 @@ interface InteractiveArgsOpts {
 
 interface TranscriptUsage { inputTokens: number; outputTokens: number; cacheTokens: number; assistantTurns: number; }
 
-// $/million tokens. Conservative defaults.
+// $/million tokens. Conservative defaults. Older model ids kept so cost can still
+// be reconstructed when resuming historical transcripts.
 const MODEL_PRICES: Record<string, { in: number; out: number }> = {
+  "claude-opus-4-8": { in: 15, out: 75 },
   "claude-opus-4-7": { in: 15, out: 75 },
   "claude-sonnet-4-6": { in: 3, out: 15 },
   "claude-haiku-4-5": { in: 1, out: 5 },
