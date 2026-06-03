@@ -65,6 +65,13 @@ WebUI の onboarding wizard が `/goal` / Canvas / triage を案内するので�
 - 🧵 **DM-equivalent 検出** — チャンネル内でも「ボット + 自分だけの会話」を検出して triage を skip、自然な対話を実現
 - 📡 **Telegram コネクタ** — Jinn には無い 4 つ目のコネクタ
 
+### エンジン / コスト最適化系（全て OpenRyoko 独自）
+
+- 💸 **Interactive PTY エンジン** — Claude を「対話モード」で PTY 起動（`cc_entrypoint=cli`）。2026/6/15 の Claude 改定後も自動化を**通常のサブスク利用枠**で動かし、Agent SDK クレジットの消費・追加課金を回避（オプトイン。SSH 実行は `claude -p` に自動フォールバック、ターンタイムアウト等で堅牢化）
+- 📊 **コンテキストメーター** — codex / claude 両エンジンで直近ターンの入力コンテキスト量を計測・可視化。コンテキスト枯渇の予兆が一目で分かる
+- 🖥️ **ライブ xterm CLI ビュー** — ダッシュボードで Claude の PTY セッションをそのままターミナル表示（`/ws/pty`、Origin/host ガード付き）
+- ⚙️ **`ryoko config interactive` + setup/update プロンプト** — CLI でも Web UI でも interactive を切替。更新時に未設定なら対話で案内
+
 ### セキュリティ / 運用系（全て OpenRyoko 独自）
 
 - 🔒 **Loopback Host header guard + 限定 CORS** — DNS rebinding 対策。`gateway.host = 127.0.0.1` デフォルトで安全
@@ -93,9 +100,17 @@ WebUI の onboarding wizard が `/goal` / Canvas / triage を案内するので�
 
 ### 🔑 Anthropic Max サブスクリプションで動く
 
-OpenRyoko は Claude Code CLI を子プロセスとして起動するため、Anthropic の公式クライアントとして扱われ、[月額$200の Max サブスクリプション](https://www.anthropic.com/pricing)の枠内で動作します。APIトークン従量課金ではありません。
+OpenRyoko は Claude Code CLI を子プロセスとして起動するため、Anthropic の公式クライアントとして扱われ、[Max サブスクリプション](https://www.anthropic.com/pricing)の利用枠で動作します。APIトークン従量課金を前提にしません。
 
-空気読みトリアージと `/goal` 抽出は軽量 Haiku を使いますが、これも Claude Code CLI 経由なので Max サブスクに含まれます（$0）。
+> **⚠️ 2026年6月15日の Claude 改定への対応**
+>
+> この日から「Claude Agent SDK クレジット」という**別枠の月次クレジット**が新設され、**プログラム的な利用**（`claude -p` 非対話モード / Claude Agent SDK / Claude Code GitHub Actions）はこの別枠（消費レートは API と同一・プラン額相当を毎月付与）から消費されるようになりました。一方、**対話（インタラクティブ）利用は対象外で、従来どおり通常のサブスク枠**で動きます。
+>
+> OpenRyoko は **Interactive PTY エンジン**（`engines.claude.interactive`）を備え、自動化のターンも「人が使うのと同じ対話モード」で Claude を起動します。これにより**改定後も通常のサブスク利用枠で動き続け**、Agent SDK クレジットの消費や追加課金を避けられます。
+> - 既定は従来の headless `claude -p`。**`ryoko config interactive on`**、または **設定画面 → エンジン設定 → 「インタラクティブPTY」トグル**、もしくは `ryoko setup` / `ryoko update` の対話プロンプトで有効化（反映にはゲートウェイ再起動）。
+> - SSH リモート実行の従業員は PTY を使えないため、自動で headless `claude -p` にフォールバックします。
+
+空気読みトリアージと `/goal` 抽出は軽量 Haiku を使いますが、これも Claude Code CLI 経由です。
 
 ### 🧠 「バス、脳ではない」哲学
 
@@ -185,10 +200,15 @@ gateway:
   port: 7777
 
 engines:
+  default: claude
   claude:
-    enabled: true
+    bin: claude
+    model: opus            # opus エイリアスは最新 Opus（claude-opus-4-8）に解決
+    effortLevel: medium
+    interactive: false     # true で対話モード(PTY)起動 → 6/15改定後も通常サブスク枠で動く
   codex:
-    enabled: false
+    bin: codex
+    model: gpt-5.5
 
 connectors:
   slack:
@@ -301,6 +321,11 @@ ExecStart）を必ず編集してください。
 ダッシュボードの Settings 画面で Slack トークン等を保存すると、`~/.ryoko/config.yaml`
 が更新されたあと自動でコネクタが再接続されます（v0.9.5 以降）。デーモン再起動は
 不要です。手動で再接続したい場合は `POST /api/connectors/reload` を叩けます。
+
+Settings → エンジン設定 には **「インタラクティブPTY（Max定額）」トグル** もあり、
+`engines.claude.interactive` を切替できます（6/15 の Claude 改定対応）。エンジンの選択は
+起動時に確定するため、このトグルの反映には**ゲートウェイの再起動が必要**です
+（`ryoko update --restart` か `ryoko stop && ryoko start`）。
 
 ## 🎯 自然言語 `/goal` — 自律完遂タスク
 
