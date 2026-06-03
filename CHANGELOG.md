@@ -2,6 +2,15 @@
 
 > **バージョン体系について**: 2026.4.26 から日付ベース (`YYYY.M.D`) のCalVerに移行しました。npm semver の制約上、月・日の leading zero は付けません (例: 4月26日 → `2026.4.26`)。
 
+## [2026.6.5] - 2026-06-03
+
+### Features
+- **設定画面に「インタラクティブPTY（Max定額）」トグル**: ダッシュボードの「エンジン設定」から `engines.claude.interactive` を確認・切替できるように（CLI を使わずに済む）。保存後はゲートウェイ再起動で反映。
+- **Claude Opus 4.8 対応**: `opus` エイリアスは Claude CLI が最新 Opus に解決するため既定で 4.8 を使用。設定画面のモデル表記を `claude-opus-4-8` に更新し、コスト推定表に `claude-opus-4-8` を追加（旧 ID も履歴セッションのコスト再構築用に保持）。
+
+### Tests
+- jimmy: 452 tests pass（`PUT /api/config` の deep-merge が interactive フラグを設定しつつ connector secret/他フィールドを保持することの回帰テストを追加）。
+
 ## [2026.6.4] - 2026-06-03
 
 ### Features
