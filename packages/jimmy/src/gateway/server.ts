@@ -971,8 +971,31 @@ export async function startGateway(
     });
   });
 
+  // Origin guard for WS upgrades. WebSocket isn't covered by CORS preflight, so a
+  // cross-site browser page could otherwise open /ws/pty and inject stdin into the
+  // Claude PTY. Allow only same-host / loopback / configured-host origins; a non-
+  // browser client (no Origin header) is allowed. Mirrors the HTTP CORS intent.
+  function wsOriginAllowed(originHeader: string | undefined, hostHeader: string | undefined): boolean {
+    if (!originHeader) return true; // non-browser client
+    let originHost: string;
+    try { originHost = new URL(originHeader).hostname; } catch { return false; }
+    if (LOOPBACK_HOSTNAMES.has(originHost)) return true;
+    if (originHost === configuredHost) return true;
+    // Same-origin as the request's Host (strip port) — the gateway-served UI.
+    if (hostHeader) {
+      const lastColon = hostHeader.lastIndexOf(":");
+      const closingBracket = hostHeader.lastIndexOf("]");
+      const hostname = lastColon > closingBracket ? hostHeader.slice(0, lastColon) : hostHeader;
+      if (originHost === hostname) return true;
+    }
+    return false;
+  }
+
   server.on("upgrade", (req, socket, head) => {
     const reqUrl = req.url || "";
+    // DNS-rebinding / cross-host guard — mirror the HTTP request path so a WS
+    // upgrade can't bypass it. Applies to both /ws and /ws/pty.
+    if (!hostIsAllowed(req.headers.host)) { socket.destroy(); return; }
     if (reqUrl === "/ws") {
       wss.handleUpgrade(req, socket, head, (ws) => {
         wss.emit("connection", ws, req);
@@ -984,7 +1007,10 @@ export async function startGateway(
     // the FE hides the CLI toggle for them, so this only refuses stragglers).
     const ptyMatch = reqUrl.split("?")[0].match(/^\/ws\/pty\/([^/]+)$/);
     if (ptyMatch) {
-      const sessionId = decodeURIComponent(ptyMatch[1]);
+      // /ws/pty forwards stdin to the PTY — reject cross-site browser origins.
+      if (!wsOriginAllowed(req.headers.origin, req.headers.host)) { socket.destroy(); return; }
+      let sessionId: string;
+      try { sessionId = decodeURIComponent(ptyMatch[1]); } catch { socket.destroy(); return; }
       const ptySession = getSession(sessionId);
       const ptyEngine = ptySession ? ptyViewEngines[ptySession.engine] : undefined;
       if (!ptyEngine) { socket.destroy(); return; }
@@ -1215,8 +1241,14 @@ export async function startGateway(
     }
     wsClients.clear();
 
-    // Close WebSocket server
+    // Close the per-session PTY WS sockets + server too (separate from `wss`).
+    for (const client of ptyWss.clients) {
+      try { client.close(1001, "Server shutting down"); } catch { /* already closing */ }
+    }
+
+    // Close WebSocket servers
     await new Promise<void>((resolve) => wss.close(() => resolve()));
+    await new Promise<void>((resolve) => ptyWss.close(() => resolve()));
 
     // Close HTTP server
     await new Promise<void>((resolve, reject) => {

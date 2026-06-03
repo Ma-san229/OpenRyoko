@@ -11,6 +11,8 @@ export default (phase: string): NextConfig => {
     config.rewrites = async () => [
       { source: "/api/:path*", destination: `http://127.0.0.1:${gatewayPort}/api/:path*` },
       { source: "/ws", destination: `http://127.0.0.1:${gatewayPort}/ws` },
+      // Live xterm CLI view (interactive PTY) — forward the per-session PTY socket.
+      { source: "/ws/pty/:path*", destination: `http://127.0.0.1:${gatewayPort}/ws/pty/:path*` },
     ];
   } else {
     config.output = "export";

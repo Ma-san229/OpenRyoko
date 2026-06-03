@@ -620,9 +620,12 @@ export function ChatPane({
 
       {/* Messages / CLI transcript */}
       {viewMode === 'cli' && sessionId ? (
-        // Live xterm onto the interactive PTY when the gateway runs Claude in
-        // interactive mode; otherwise the poll-based transcript (headless `-p`).
-        claudeInteractive && (currentSession?.engine === 'claude' || !currentSession?.engine) ? (
+        // Live xterm onto the interactive PTY only when the gateway runs Claude in
+        // interactive mode AND this session is confirmed a claude session. Any other
+        // engine (codex/gemini) or an unloaded/unknown engine falls back to the
+        // poll-based transcript, which works for every engine and never opens a
+        // /ws/pty the server would just refuse.
+        claudeInteractive && currentSession?.engine === 'claude' ? (
           <CliTerminal sessionId={sessionId} />
         ) : (
           <CliTranscript sessionId={sessionId} />
