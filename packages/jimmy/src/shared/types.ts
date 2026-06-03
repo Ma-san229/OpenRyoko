@@ -477,6 +477,10 @@ export interface JinnConfig {
       interactive?: boolean;
       /** Max simultaneously-live PTYs for the interactive engine (LRU-evicted). Default 8. */
       maxLivePtys?: number;
+      /** Hard ceiling (ms) on a single interactive turn before it is force-settled
+       *  as timed out. Guards against a hung-but-alive PTY zombying a session.
+       *  Default 900000 (15 min). */
+      interactiveTurnTimeoutMs?: number;
     };
     codex: { bin: string; model: string; effortLevel?: string; childEffortOverride?: string };
     gemini?: { bin: string; model: string; effortLevel?: string; childEffortOverride?: string };

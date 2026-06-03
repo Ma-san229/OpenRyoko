@@ -185,7 +185,12 @@ export async function startGateway(
     });
     // Pass the headless engine as a remote fallback so sshHost employees still run
     // over SSH (the local PTY can't), while local turns get the Max-subsidized PTY.
-    interactiveClaudeEngine = new InteractiveClaudeEngine(claudeLifecycle, hookRegistry, claudeEngine);
+    interactiveClaudeEngine = new InteractiveClaudeEngine(
+      claudeLifecycle,
+      hookRegistry,
+      claudeEngine,
+      config.engines?.claude?.interactiveTurnTimeoutMs ?? 15 * 60 * 1000,
+    );
     copyHookRelayAsset();
     // Pre-trust JINN_HOME in the real ~/.claude.json so PTY-spawned Claude (cwd =
     // JINN_HOME) doesn't block every turn on the interactive "trust this folder?"

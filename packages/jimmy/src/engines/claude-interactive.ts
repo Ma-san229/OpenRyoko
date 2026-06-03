@@ -304,6 +304,13 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
      *  A PTY runs Claude locally for the Max subsidy, so it cannot drive a remote
      *  engine over SSH; OpenRyoko's sshHost employees delegate to `-p` instead. */
     private remoteFallback?: InterruptibleEngine,
+    /** Hard ceiling on a single turn. The Stop-hook resolution loop has no inherent
+     *  timeout, and the proc-exit watchdog only catches a DEAD pty — a pty that hangs
+     *  while still alive (e.g. a wedged upstream request, a boot-time race) would
+     *  never resolve and would zombie the session as status:"running" forever. This
+     *  deadline force-settles such a turn with an error so manager.ts runs its normal
+     *  completion/recovery path. Default 15 min. */
+    private turnTimeoutMs = 15 * 60 * 1000,
   ) {}
 
   async run(opts: EngineRunOpts): Promise<EngineResult> {
@@ -384,10 +391,20 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
     // would never fire. Both the stuck "in progress" badge and lost child-session
     // callbacks trace to this. Force-settle once the proc is provably dead so
     // run() always resolves and the normal completion path runs.
+    const turnStartedAt = Date.now();
     const watchdog = setInterval(() => {
       const p = entry.boundProc as { _exitCode?: number | null } | undefined;
       if (p && p._exitCode != null) {
         resolver.interrupt("Interrupted: claude process exited");
+        return;
+      }
+      // Turn-level deadline: a pty that hangs while still alive (no Stop hook, no
+      // exit) would otherwise never resolve. Force-settle and release the pty so the
+      // session can't zombie as status:"running".
+      if (Date.now() - turnStartedAt > this.turnTimeoutMs) {
+        logger.warn(`InteractiveClaudeEngine: turn for ${jinnSessionId} exceeded ${Math.round(this.turnTimeoutMs / 1000)}s — force-settling as timed out`);
+        resolver.interrupt("Interrupted: interactive turn timed out");
+        this.lifecycle.releaseSession(jinnSessionId);
       }
     }, 5000);
     watchdog.unref?.();
