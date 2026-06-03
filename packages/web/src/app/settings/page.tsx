@@ -1228,7 +1228,8 @@ export default function SettingsPage() {
                 <div
                   className="text-[length:var(--text-caption1)] text-[var(--label-secondary)] mt-[4px]"
                 >
-                  有効にすると Claude の作業ターンを PTY（cc_entrypoint=cli）で実行し、Max サブスクリプション課金になります（API 従量課金を回避）。
+                  有効にすると Claude の作業ターンを PTY（cc_entrypoint=cli）で実行します。
+                  Claude CLI が Max サブスクリプションでログイン済みなら、API 従量課金ではなく Max 側の利用枠で実行されます。
                   SSH リモート実行の従業員は headless <code>claude -p</code> にフォールバックします。
                   <strong>変更の反映にはゲートウェイの再起動が必要です</strong>（保存後に <code>ryoko stop &amp;&amp; ryoko start</code> など）。
                 </div>
