@@ -127,7 +127,7 @@ interface Config {
   gateway?: { port?: number; host?: string }
   engines?: {
     default?: string
-    claude?: { bin?: string; model?: string; effortLevel?: string }
+    claude?: { bin?: string; model?: string; effortLevel?: string; interactive?: boolean }
     codex?: { bin?: string; model?: string; effortLevel?: string }
   }
   sessions?: {
@@ -1217,6 +1217,21 @@ export default function SettingsPage() {
                     ]}
                   />
                 </FieldRow>
+                <FieldRow label="インタラクティブPTY（Max定額）">
+                  <ToggleSwitch
+                    checked={config.engines?.claude?.interactive ?? false}
+                    onChange={(v) =>
+                      updateConfig(["engines", "claude", "interactive"], v)
+                    }
+                  />
+                </FieldRow>
+                <div
+                  className="text-[length:var(--text-caption1)] text-[var(--label-secondary)] mt-[4px]"
+                >
+                  有効にすると Claude の作業ターンを PTY（cc_entrypoint=cli）で実行し、Max サブスクリプション課金になります（API 従量課金を回避）。
+                  SSH リモート実行の従業員は headless <code>claude -p</code> にフォールバックします。
+                  <strong>変更の反映にはゲートウェイの再起動が必要です</strong>（保存後に <code>ryoko stop &amp;&amp; ryoko start</code> など）。
+                </div>
 
                 <div
                   className="border-t border-[var(--separator)] mt-[var(--space-3)] pt-[var(--space-3)]"
