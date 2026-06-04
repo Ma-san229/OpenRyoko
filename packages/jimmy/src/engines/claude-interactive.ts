@@ -311,8 +311,9 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
      *  while still alive (e.g. a wedged upstream request, a boot-time race) would
      *  never resolve and would zombie the session as status:"running" forever. This
      *  deadline force-settles such a turn with an error so manager.ts runs its normal
-     *  completion/recovery path. Default 15 min. */
-    private turnTimeoutMs = 15 * 60 * 1000,
+     *  completion/recovery path. Default 90 min — long enough for heavy autonomous
+     *  batch runs (e.g. the seminar-demo generator) to complete in a single turn. */
+    private turnTimeoutMs = 90 * 60 * 1000,
   ) {}
 
   async run(opts: EngineRunOpts): Promise<EngineResult> {

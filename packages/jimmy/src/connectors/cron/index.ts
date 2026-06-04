@@ -75,6 +75,16 @@ export class CronConnector implements Connector {
   private async forward(target: Target, text: string, asReply: boolean): Promise<string | void> {
     if (!this.delivery) return undefined;
 
+    // No connector configured. An empty defaultDelivery ({}) is the intentional
+    // "jobs self-deliver via curl" case — stay silent. But a delivery that names a
+    // channel yet omits the connector is a real misconfig worth surfacing.
+    if (!this.delivery.connector) {
+      if (this.delivery.channel) {
+        logger.warn(`Cron delivery has channel "${this.delivery.channel}" but no connector — skipping delivery`);
+      }
+      return undefined;
+    }
+
     const connector = this.connectors.get(this.delivery.connector);
     if (!connector) {
       logger.warn(`Cron delivery connector "${this.delivery.connector}" not found`);

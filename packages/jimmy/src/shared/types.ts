@@ -479,7 +479,8 @@ export interface JinnConfig {
       maxLivePtys?: number;
       /** Hard ceiling (ms) on a single interactive turn before it is force-settled
        *  as timed out. Guards against a hung-but-alive PTY zombying a session.
-       *  Default 900000 (15 min). */
+       *  Default 5400000 (90 min) — accommodates long autonomous batch runs that
+       *  legitimately occupy one turn (e.g. the seminar-demo generator). */
       interactiveTurnTimeoutMs?: number;
     };
     codex: { bin: string; model: string; effortLevel?: string; childEffortOverride?: string };
