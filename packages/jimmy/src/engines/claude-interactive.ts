@@ -298,6 +298,11 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
    *  apply only at spawn, so a mid-chat switch must cold-respawn rather than reuse
    *  the warm PTY (which would keep running the old model). */
   private spawnParams = new Map<string, { model?: string; effortLevel?: string }>();
+  /** PTY handles already torn down by handlePtyDeath(). A socket `error` (EIO) and
+   *  the proc's `onExit` can both fire for the same PTY (in either order, or only
+   *  one of them), and run()'s warm-reuse guard may also report it dead — so death
+   *  handling must be idempotent. Membership = "already handled"; checked first. */
+  private deadHandles = new WeakSet<PtyHandle>();
 
   constructor(
     private lifecycle: PtyLifecycleManager,
@@ -373,18 +378,36 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
       }
     });
 
+    // Liveness guard: a socket error (EIO) between getWarm() above and here may have
+    // already torn this handle down (handlePtyDeath → deadHandles + evict). Never inject
+    // into a corpse — fall through to a cold respawn. This is the silent-drop / queue-
+    // stall path of issue #18 (warm reuse of a dead PTY → no SessionStart/Stop → hang).
+    if (warm && (this.deadHandles.has(warm) || warm.killed)) {
+      warm = undefined;
+    }
     if (warm) {
-      // Mark the turn started BEFORE injecting so the sweep timer can't
-      // theoretically release the PTY mid-paste if its grace window expired
-      // between getWarm() above and the proc.write() inside injectPrompt.
-      this.lifecycle.turnStarted(jinnSessionId);
-      this.injectPrompt(warm, opts);
+      logger.info(`InteractiveClaudeEngine reusing warm PTY for ${jinnSessionId}`);
+      // Bind the proc BEFORE injecting: handlePtyDeath only interrupts the active turn
+      // when entry.boundProc === proc, so a death during/around inject must find it set.
       entry.boundProc = (warm as any)._proc as pty.IPty | undefined;
+      // Mark the turn started BEFORE injecting so the sweep timer can't release the PTY
+      // mid-paste if its grace window expired between getWarm() and the proc.write().
+      this.lifecycle.turnStarted(jinnSessionId);
+      try {
+        this.injectPrompt(warm, opts);
+      } catch (err) {
+        // Writing to a dead PTY socket throws — treat as a PTY death so the turn settles
+        // (and the corpse is evicted) instead of hanging until the turn watchdog.
+        const msg = err instanceof Error ? err.message : String(err);
+        if (entry.boundProc) this.handlePtyDeath(jinnSessionId, entry.boundProc, warm, `PTY inject failed (${msg})`);
+      }
     } else {
       const handle = await this.spawn(jinnSessionId, opts, settingsPath);
+      // Bind the proc before adopt/turnStarted so an early error/exit (before the
+      // watchdog arms) still settles the turn via handlePtyDeath's boundProc gate.
+      entry.boundProc = (handle as any)._proc as pty.IPty | undefined;
       this.lifecycle.adopt(jinnSessionId, handle);
       this.lifecycle.turnStarted(jinnSessionId);
-      entry.boundProc = (handle as any)._proc as pty.IPty | undefined;
     }
 
     // Watchdog: if the bound PTY dies without the resolver settling (e.g. the
@@ -492,6 +515,46 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
     }
   }
 
+  /** Idempotent teardown for a dead PTY — shared by the socket-`error` handler, the
+   *  proc `onExit` handler, and run()'s warm-reuse failure path. A broken PTY can raise
+   *  `error` WITHOUT ever firing `onExit` (and both can fire, in either order), so no
+   *  single trigger is sufficient; `deadHandles` makes the first caller win and the rest
+   *  no-op. Steps: (1) identity-gated lifecycle cleanup (evict the warm corpse + clear
+   *  scrollback) only if this is still the session's current handle; (2) stop the per-PTY
+   *  SSE proxy; (3) interrupt the active turn iff this proc is the bound one, so run()'s
+   *  promise resolves instead of hanging until the turn watchdog (issue #18). */
+  private handlePtyDeath(jinnSessionId: string, proc: pty.IPty, handle: PtyHandle, cause: string): void {
+    if (this.deadHandles.has(handle)) return;
+    this.deadHandles.add(handle);
+    // Identity gate: in a kill->respawn race the lifecycle/stream entries already point
+    // at the NEW PTY by the time THIS (old) PTY dies. Only touch shared state when this
+    // handle is still the session's current warm one — else we'd evict the live PTY.
+    const isCurrent = this.lifecycle.getWarm(jinnSessionId) === handle;
+    if (isCurrent) {
+      // Clear scrollback so a stale farewell (Claude's "Resume this session…" hint on
+      // SIGHUP shutdown) doesn't persist into the next PTY incarnation.
+      const s = this.streams.get(jinnSessionId);
+      if (s) {
+        s.chunks = [];
+        s.totalBytes = 0;
+        // Drop the entry if no WS subscribers — otherwise it leaks one per ran session.
+        if (s.subscribers.size === 0) this.streams.delete(jinnSessionId);
+      }
+      // Evict so a future run() can't pick this dead handle up as "warm" and inject
+      // into a corpse.
+      this.lifecycle.releaseSession(jinnSessionId);
+    }
+    // Tear down THIS PTY's SSE forward proxy (one per PTY) regardless of identity.
+    ((handle as any)._proxy as SsePtyProxy | undefined)?.stop();
+    // Settle the active turn as interrupted so run()'s promise doesn't hang — but only
+    // if this dying proc is the one bound to the active turn. After a kill->respawn race
+    // the active entry holds the NEW turn's resolver+proc; identity mismatch => no-op.
+    const e = this.active.get(jinnSessionId);
+    if (e && e.boundProc === proc) {
+      e.resolver.interrupt(`Interrupted: claude ${cause}`);
+    }
+  }
+
   /** Wrap a freshly-spawned pty.IPty in a PtyHandle and wire its output into
    *  the session's scrollback ring buffer + live subscribers. On PTY exit, if this
    *  proc is the one bound to the active turn, the resolver is interrupted (a crash
@@ -521,8 +584,16 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
     // internal handler), so any socket error (EIO on claude exit, EPIPE, etc.) propagates as
     // an uncaught exception and kills the daemon. Adding a handler here bumps the count to 2
     // and prevents the throw; we log it and let the onExit path handle cleanup.
+    // A PTY-master socket `error` (EIO on claude exit, EPIPE, EBADF, …) means the
+    // interactive transport is broken: reads/writes fail and `onExit` is NOT
+    // guaranteed to follow. Treat ANY error as terminal — log the code, then run the
+    // same teardown as onExit. Leaving a broken PTY warm is what zombied a sessionKey:
+    // the next run() reused the corpse, injected into a dead socket, and the turn hung
+    // until the 90-min watchdog (see issue #18). Cleanup is idempotent (deadHandles).
     (proc as any).on?.("error", (err: Error) => {
+      const code = (err as NodeJS.ErrnoException).code ?? err.message;
       logger.warn(`PTY socket error for session ${jinnSessionId}: ${err.message}`);
+      this.handlePtyDeath(jinnSessionId, proc, handle, `PTY socket error (${code})`);
     });
 
     proc.onData((d) => {
@@ -546,45 +617,12 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
       }
     });
     proc.onExit(() => {
-      // Session-level cleanup MUST be identity-gated. In a kill->respawn race the
-      // lifecycle/stream entries already point at the NEW PTY by the time THIS
-      // (old, killed) PTY's exit fires. releaseSession is keyed by sessionId, so an
-      // unguarded call here would kill the freshly-adopted PTY — whose own onExit
-      // then fires the spurious second "claude process exited". Only this PTY being
-      // the session's CURRENT warm handle means the cleanup is ours to do.
-      const isCurrent = this.lifecycle.getWarm(jinnSessionId) === handle;
-      if (isCurrent) {
-        // Clear scrollback so a stale farewell (Claude's "Resume this session…" hint
-        // printed on SIGHUP shutdown) doesn't persist into the next PTY incarnation.
-        const s = this.streams.get(jinnSessionId);
-        if (s) {
-          s.chunks = [];
-          s.totalBytes = 0;
-          // If no WS subscribers are attached, the entry is dead weight — drop it so
-          // the map doesn't leak entries for every session that ever ran. Subscribers,
-          // when present, are kept so a future respawn can notify them via Task 4's
-          // reset event; that path also clears the subscribers Set on full teardown.
-          if (s.subscribers.size === 0) {
-            this.streams.delete(jinnSessionId);
-          }
-        }
-        // Release the lifecycle entry so the dead handle isn't picked up by a future
-        // run() as "warm" — that would inject into a corpse.
-        this.lifecycle.releaseSession(jinnSessionId);
-      }
-      // Tear down THIS PTY's SSE forward proxy (one proxy per PTY) regardless.
-      proxy?.stop();
-      // PTY exited without a Stop hook (crash / early exit) — settle the active turn
-      // as interrupted so run()'s promise doesn't hang. BUT only if this dying proc is
-      // the one bound to the active turn: after a kill->respawn race the active entry
-      // holds the NEW turn's resolver+proc, and this (old, released) proc must not
-      // poison it. Identity mismatch => benign cleanup, no interrupt.
-      const e = this.active.get(jinnSessionId);
-      if (e && e.boundProc === proc) {
-        e.resolver.interrupt("Interrupted: claude process exited");
-      }
+      this.handlePtyDeath(jinnSessionId, proc, handle, "process exited");
     });
     (handle as any)._proc = proc;
+    // Keep the per-PTY proxy reachable from the handle so handlePtyDeath can tear it
+    // down even when invoked from run()'s warm-reuse path (which has no proxy closure).
+    (handle as any)._proxy = proxy;
     return handle;
   }
 
