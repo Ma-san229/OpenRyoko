@@ -37,13 +37,18 @@ export class SessionQueue {
   }
 
   /**
-   * Cancel every task currently queued for this session and reset its pending count.
-   * Tasks enqueued AFTER this call run normally (they capture the bumped generation),
-   * so cancellation is scoped to the moment of the call rather than sticky.
+   * Cancel every task currently queued for this session. Tasks enqueued AFTER this
+   * call run normally (they capture the bumped generation), so cancellation is scoped
+   * to the moment of the call rather than sticky.
+   *
+   * NB: pending is intentionally NOT reset here. Cancelled tasks still drain through
+   * runTask (they skip fn but run their finally → decrementPending), so each task
+   * accounts for its own slot. Zeroing pending here would let those in-flight
+   * decrements eat the count of a task enqueued afterwards, corrupting the queued
+   * state — the count converges naturally as the cancelled tasks drain.
    */
   clearQueue(sessionKey: string): void {
     this.cancelGeneration.set(sessionKey, (this.cancelGeneration.get(sessionKey) ?? 0) + 1);
-    this.pending.delete(sessionKey);
   }
 
   /**

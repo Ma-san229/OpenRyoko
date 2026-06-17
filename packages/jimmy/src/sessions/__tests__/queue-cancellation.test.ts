@@ -25,11 +25,17 @@ describe("SessionQueue generational cancellation", () => {
     // A new inbound message arrives AFTER the reset — it must still run.
     const third = queue.enqueue("slack:C1", async () => { cRan = true; });
 
+    // Pending accounting must survive clearQueue: C is queued behind the running A, so
+    // the depth is > 0. (The earlier sticky-flag approach zeroed pending in clearQueue,
+    // which let A/B's drain decrements eat C's slot and report 0 queued here.)
+    expect(queue.getPendingCount("slack:C1")).toBeGreaterThan(0);
+
     releaseFirst?.();
     await Promise.allSettled([first, second, third]);
 
     expect(bRan).toBe(false); // cancelled by clearQueue — not revived by the later message
     expect(cRan).toBe(true);  // newer generation → runs (recovery without a sticky mute)
+    expect(queue.getPendingCount("slack:C1")).toBe(0); // no leak / underflow after drain
   });
 
   it("a session reset while idle still runs the next inbound message (no permanent mute)", async () => {
