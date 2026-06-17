@@ -224,6 +224,9 @@ export class SessionManager {
 
     const sessionId = session.id;
 
+    // Queue cancellation is generational (see SessionQueue.clearQueue): this new
+    // inbound message enqueues at the current generation and runs even if the session
+    // was previously /stop- or watchdog-reset, so no explicit un-cancel is needed here.
     await this.queue.enqueue(msg.sessionKey, () =>
       this.runSession(session!, msg, attachmentPaths, connector, target, opts.employee),
     );
