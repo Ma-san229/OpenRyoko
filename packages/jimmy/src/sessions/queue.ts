@@ -6,8 +6,13 @@ export class SessionQueue {
   private running = new Set<string>();
   /** Track how many tasks exist per session key, including the active one. */
   private pending = new Map<string, number>();
-  /** Track which session keys have been cancelled - queued tasks are skipped. */
-  private cancelled = new Set<string>();
+  /** Per-session cancellation generation. clearQueue() bumps it; each task captures
+   *  the generation at enqueue time and runs only while it still matches. This cancels
+   *  exactly the tasks that existed at /stop time WITHOUT a sticky per-session flag:
+   *  a later inbound message enqueues at the new generation and runs normally, so a
+   *  reset session neither stays permanently muted (the bug this replaces) nor revives
+   *  already-cancelled work when the next message arrives. */
+  private cancelGeneration = new Map<string, number>();
   /** Track which session keys are paused - queued tasks wait until resumed. */
   private paused = new Set<string>();
 
@@ -32,20 +37,22 @@ export class SessionQueue {
   }
 
   /**
-   * Add a session key to the cancelled set and remove it from pending.
-   * Any queued tasks for this key will be skipped when they next execute.
+   * Cancel every task currently queued for this session and reset its pending count.
+   * Tasks enqueued AFTER this call run normally (they capture the bumped generation),
+   * so cancellation is scoped to the moment of the call rather than sticky.
    */
   clearQueue(sessionKey: string): void {
-    this.cancelled.add(sessionKey);
+    this.cancelGeneration.set(sessionKey, (this.cancelGeneration.get(sessionKey) ?? 0) + 1);
     this.pending.delete(sessionKey);
   }
 
   /**
-   * Remove a session key from the cancelled set.
-   * Call this before dispatching a new message so subsequent tasks run normally.
+   * No-op retained for API compatibility. Cancellation is now generational: a new
+   * message enqueues at the current generation and runs without needing an explicit
+   * un-cancel, so callers no longer have to clear a sticky flag before dispatching.
    */
-  clearCancelled(sessionKey: string): void {
-    this.cancelled.delete(sessionKey);
+  clearCancelled(_sessionKey: string): void {
+    /* intentionally empty — see cancelGeneration */
   }
 
   pauseQueue(sessionKey: string): void {
@@ -65,6 +72,10 @@ export class SessionQueue {
    */
   async enqueue(sessionKey: string, fn: () => Promise<void>, queueItemId?: string): Promise<void> {
     this.pending.set(sessionKey, (this.pending.get(sessionKey) || 0) + 1);
+    // Snapshot the cancellation generation at enqueue time. A later clearQueue()
+    // bumps it and skips this task; tasks enqueued after that clearQueue capture the
+    // new value and still run.
+    const taskGeneration = this.cancelGeneration.get(sessionKey) ?? 0;
     const prev = this.queues.get(sessionKey) || Promise.resolve();
     const runTask = async () => {
       this.running.add(sessionKey);
@@ -74,7 +85,7 @@ export class SessionQueue {
           await new Promise(resolve => setTimeout(resolve, 500));
         }
         if (queueItemId) markQueueItemRunning(queueItemId);
-        if (!this.cancelled.has(sessionKey)) {
+        if ((this.cancelGeneration.get(sessionKey) ?? 0) === taskGeneration) {
           await fn();
         }
         if (queueItemId) markQueueItemCompleted(queueItemId);
