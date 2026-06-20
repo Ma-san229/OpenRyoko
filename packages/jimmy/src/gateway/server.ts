@@ -1041,6 +1041,7 @@ export async function startGateway(
       try {
         const previous = currentConfig;
         currentConfig = loadConfig();
+        invalidateModelRegistry(); // rebuild the model/capability registry from the reloaded config
         apiContext.config = currentConfig;
         // Propagate the fresh config into SessionManager so new sessions
         // pick up edits to engines.default / portal.* / engine bin paths

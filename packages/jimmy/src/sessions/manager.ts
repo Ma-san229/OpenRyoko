@@ -332,7 +332,7 @@ export class SessionManager {
         engineConfig,
         session,
         employee,
-        effortLevelsForModel(this.config, session.engine, session.model ?? undefined),
+        effortLevelsForModel(this.config, session.engine, session.model ?? engineConfig.model),
       );
 
       // If we previously switched to GPT while Claude was rate-limited, inject a sync transcript

@@ -2287,7 +2287,7 @@ async function runWebSession(
       engineConfig,
       currentSession,
       employee,
-      effortLevelsForModel(config, currentSession.engine, currentSession.model ?? undefined),
+      effortLevelsForModel(config, currentSession.engine, currentSession.model ?? engineConfig.model),
     );
 
     let lastHeartbeatAt = 0;
