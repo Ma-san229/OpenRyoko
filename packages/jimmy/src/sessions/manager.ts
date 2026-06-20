@@ -23,6 +23,7 @@ import { SessionQueue } from "./queue.js";
 import { JINN_HOME } from "../shared/paths.js";
 import { logger } from "../shared/logger.js";
 import { resolveEffort } from "../shared/effort.js";
+import { effortLevelsForModel } from "../shared/models.js";
 import { computeNextRetryDelayMs, computeRateLimitDeadlineMs, detectRateLimit, isDeadSessionError, isPoisonedTranscriptError } from "../shared/rateLimit.js";
 import { getClaudeExpectedResetAt, isLikelyNearClaudeUsageLimit, recordClaudeRateLimit } from "../shared/usageAwareness.js";
 import { loadJobs } from "../cron/jobs.js";
@@ -327,7 +328,12 @@ export class SessionManager {
         }
       }
 
-      const effortLevel = resolveEffort(engineConfig, session, employee);
+      const effortLevel = resolveEffort(
+        engineConfig,
+        session,
+        employee,
+        effortLevelsForModel(this.config, session.engine, session.model ?? undefined),
+      );
 
       // If we previously switched to GPT while Claude was rate-limited, inject a sync transcript
       // so Claude can resume with full context when it comes back online.
@@ -538,7 +544,12 @@ export class SessionManager {
             });
 
             const fallbackConfig = this.config.engines.codex;
-            const fallbackEffort = resolveEffort(fallbackConfig, session, employee);
+            const fallbackEffort = resolveEffort(
+              fallbackConfig,
+              session,
+              employee,
+              effortLevelsForModel(this.config, "codex", session.model ?? fallbackConfig.model),
+            );
             const codexResume = typeof engineSessions.codex === "string" ? (engineSessions.codex as string) : undefined;
             const history = getMessages(session.id)
               .filter((m) => m.role === "user" || m.role === "assistant")
