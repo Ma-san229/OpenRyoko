@@ -43,6 +43,7 @@ import { getSttStatus, downloadModel, transcribe as sttTranscribe, resolveLangua
 import { JINN_HOME } from "../shared/paths.js";
 import { handleHookPost, LOOPBACK as HOOK_LOOPBACK } from "./hook-endpoint.js";
 import { resolveEffort } from "../shared/effort.js";
+import { effortLevelsForModel, invalidateModelRegistry } from "../shared/models.js";
 import { computeNextRetryDelayMs, computeRateLimitDeadlineMs, detectRateLimit } from "../shared/rateLimit.js";
 import { getClaudeExpectedResetAt, recordClaudeRateLimit } from "../shared/usageAwareness.js";
 import { loadJobs, saveJobs } from "../cron/jobs.js";
@@ -1388,6 +1389,7 @@ Handle this as a priority request from a colleague.`;
         "jinn",
         "gateway",
         "engines",
+        "models",
         "connectors",
         "logging",
         "mcp",
@@ -1454,6 +1456,7 @@ Handle this as a priority request from a colleague.`;
       }
 
       fs.writeFileSync(CONFIG_PATH, yamlStr);
+      invalidateModelRegistry(); // models/engines may have changed — rebuild on next read
       logger.info("Config updated via API");
 
       if (connectorsChanged && context.reloadAllConnectors) {
@@ -2280,7 +2283,12 @@ async function runWebSession(
       : currentSession.engine === "gemini"
         ? config.engines.gemini ?? config.engines.claude
         : config.engines.claude;
-    const effortLevel = resolveEffort(engineConfig, currentSession, employee);
+    const effortLevel = resolveEffort(
+      engineConfig,
+      currentSession,
+      employee,
+      effortLevelsForModel(config, currentSession.engine, currentSession.model ?? engineConfig.model),
+    );
 
     let lastHeartbeatAt = 0;
     const runHeartbeat = setInterval(() => {
@@ -2398,7 +2406,12 @@ async function runWebSession(
           );
 
           const fallbackConfig = config.engines.codex;
-          const fallbackEffort = resolveEffort(fallbackConfig, currentSession, employee);
+          const fallbackEffort = resolveEffort(
+            fallbackConfig,
+            currentSession,
+            employee,
+            effortLevelsForModel(config, "codex", currentSession.model ?? fallbackConfig.model),
+          );
           const codexResume = typeof engineSessions.codex === "string" ? (engineSessions.codex as string) : undefined;
           const history = getMessages(currentSession.id)
             .filter((m) => m.role === "user" || m.role === "assistant")

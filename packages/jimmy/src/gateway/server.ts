@@ -8,6 +8,7 @@ import { randomUUID, randomBytes } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { JinnConfig, Connector, Employee } from "../shared/types.js";
 import { loadConfig } from "../shared/config.js";
+import { invalidateModelRegistry } from "../shared/models.js";
 import { configureLogger, logger } from "../shared/logger.js";
 import { initDb, recoverStaleSessions, recoverStaleQueueItems, getInterruptedSessions, listSessions, updateSession, getSession } from "../sessions/registry.js";
 import { SessionManager, type RouteOptions } from "../sessions/manager.js";
@@ -713,6 +714,7 @@ export async function startGateway(
     // engines.default / portal.* / bin paths. Callers (watcher / API) are
     // responsible for updating apiContext.config too.
     currentConfig = fresh;
+    invalidateModelRegistry(); // rebuild the model/capability registry from the new config
     sessionManager.setConfig(fresh);
 
     // Order:
@@ -1039,6 +1041,7 @@ export async function startGateway(
       try {
         const previous = currentConfig;
         currentConfig = loadConfig();
+        invalidateModelRegistry(); // rebuild the model/capability registry from the reloaded config
         apiContext.config = currentConfig;
         // Propagate the fresh config into SessionManager so new sessions
         // pick up edits to engines.default / portal.* / engine bin paths
