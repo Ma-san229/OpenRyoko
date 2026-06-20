@@ -19,6 +19,7 @@ import {
 } from "./registry.js";
 import { notifyParentSession, notifyRateLimited, notifyRateLimitResumed, notifyDiscordChannel } from "./callbacks.js";
 import { buildContext } from "./context.js";
+import { normalizeDelivery, normalizeTurns, deliverPublic, type DeliveryContext } from "./reply-disposition.js";
 import { SessionQueue } from "./queue.js";
 import { JINN_HOME } from "../shared/paths.js";
 import { logger } from "../shared/logger.js";
@@ -233,6 +234,34 @@ export class SessionManager {
     );
 
     return { sessionId };
+  }
+
+  /**
+   * Build the audience/routing context used to sanitize engine output before it
+   * is posted. `addressed` is true for any non-cron (human-originated) session:
+   * "read-the-air" silence is handled upstream in triage, so a session that ran
+   * at all owes a response. `channelExternal` defaults to true for non-DM when
+   * the connector doesn't report it (safe — strips operator notes from any
+   * public channel). See reply-disposition.ts / the 2026-06-18 design doc.
+   */
+  private buildDeliveryContext(
+    session: Session,
+    msg: IncomingMessage,
+    capabilities: { reactions: boolean },
+  ): DeliveryContext {
+    const meta = (msg.transportMeta ?? {}) as Record<string, unknown>;
+    const isDM = meta.channelType === "im";
+    const channelExternal = isDM
+      ? false
+      : meta.channelExternal === undefined
+        ? true
+        : meta.channelExternal === true;
+    return {
+      addressed: session.source !== "cron",
+      channelExternal,
+      isDM,
+      canReact: capabilities.reactions,
+    };
   }
 
   private async runSession(
@@ -594,9 +623,13 @@ export class SessionManager {
             if (decorateMessages && connector.setTypingStatus) {
               await connector.setTypingStatus(target.channel, threadTs, "").catch(() => {});
             }
-            await connector.replyMessage(target, fallbackText).catch(() => {});
+            // Clear "eyes" before delivery so a react-only ":eyes:" reply survives.
             if (decorateMessages && capabilities.reactions) {
               await connector.removeReaction(target, "eyes").catch(() => {});
+            }
+            {
+              const { publicAction } = normalizeDelivery(fallbackText, this.buildDeliveryContext(session, msg, capabilities));
+              await deliverPublic(connector, target, publicAction).catch(() => {});
             }
 
             const updated = updateSession(session.id, {
@@ -762,7 +795,10 @@ export class SessionManager {
               await connector.removeReaction(target, waitEmoji).catch(() => {});
             }
 
-            await connector.replyMessage(target, retryText).catch(() => {});
+            {
+              const { publicAction } = normalizeDelivery(retryText, this.buildDeliveryContext(session, msg, capabilities));
+              await deliverPublic(connector, target, publicAction).catch(() => {});
+            }
             const retryUpdated = updateSession(session.id, {
               ...(retryResult.sessionId?.trim() ? { engineSessionId: retryResult.sessionId } : {}),
               status: retryResult.error ? "error" : "idle",
@@ -817,23 +853,30 @@ export class SessionManager {
       if (decorateMessages && connector.setTypingStatus) {
         await connector.setTypingStatus(target.channel, threadTs, "").catch(() => {});
       }
-      if (!wasInterrupted) {
-        // Multi-turn sessions (driven by /goal) carry every intermediate
-        // turn in `result.turns`. Surface each as its own Slack reply so
-        // the user sees progress chronologically. The last entry contains
-        // the same text as `result.result`, so we send the array directly.
-        const turns = result.turns ?? [];
-        if (turns.length > 1) {
-          for (const turnText of turns) {
-            if (!turnText || !turnText.trim()) continue;
-            await connector.replyMessage(target, turnText);
-          }
-        } else {
-          await connector.replyMessage(target, responseText);
-        }
-      }
+      // Clear the processing "eyes" BEFORE delivering, so a react-only reply of
+      // ":eyes:" isn't removed by this cleanup right after it's added.
       if (decorateMessages && capabilities.reactions) {
         await connector.removeReaction(target, "eyes").catch(() => {});
+      }
+      if (!wasInterrupted) {
+        // Sanitize engine output before posting: strip operator-facing notes
+        // (reply-disposition trailer) so they never reach an external channel,
+        // and enforce "addressed ⇒ never silent". See the 2026-06-18 design doc.
+        const deliveryCtx = this.buildDeliveryContext(session, msg, capabilities);
+        // Multi-turn sessions (driven by /goal) carry every intermediate turn in
+        // `result.turns`. Batch-normalize so internal notes are stripped per turn
+        // without ack multiplication; a single ack is added only if no turn was
+        // public. The last entry equals `result.result`.
+        const turns = result.turns ?? [];
+        if (turns.length > 1) {
+          const { actions } = normalizeTurns(turns, deliveryCtx);
+          for (const action of actions) {
+            await deliverPublic(connector, target, action);
+          }
+        } else {
+          const { publicAction } = normalizeDelivery(responseText, deliveryCtx);
+          await deliverPublic(connector, target, publicAction);
+        }
       }
       const updatedSession = updateSession(session.id, {
         ...(result.sessionId?.trim() ? { engineSessionId: result.sessionId } : {}),

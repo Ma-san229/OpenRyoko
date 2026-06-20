@@ -651,9 +651,14 @@ function buildConnectorContext(connectors: string[], gatewayUrl: string, portalN
 
   lines.push("");
   lines.push("### Replying to the current conversation");
-  lines.push("- The text you return as your final answer is delivered to the current user in the correct conversation/thread.");
+  lines.push("- The text you return as your final answer is delivered to the current conversation/thread. Treat it as PUBLIC to the current speaker and channel.");
   lines.push("- Do not call `/send`, `curl`, or the `send_message` tool for the current conversation. That creates duplicate or meta replies.");
-  lines.push("- Your final answer is shown verbatim to the user, so make it the actual reply rather than work narration.");
+  lines.push("- Your final answer is shown verbatim, so make it the actual reply — NOT work narration, status reports to the operator, or internal deliberation.");
+  lines.push("- Never put operator notes, file IDs, internal drafts, approval waits (\"GO待ち\"), or instructions meant for another audience in the public body — especially in externally-shared channels.");
+  lines.push("- To keep an operator-only note out of the channel, append a trailer whose LAST non-empty line is exactly this (base64url-encoded JSON):");
+  lines.push("  `<!--RYOKO-DISPOSITION:v1:<base64url of {\"internal\":\"...\",\"react\":\":emoji:\",\"suppressPublic\":false}>-->`");
+  lines.push("  The `internal` field is never posted publicly (saved for the operator). `react` makes the public reply a single emoji reaction; `suppressPublic` omits the public body.");
+  lines.push("- When you are directly addressed (mentioned / asked), ALWAYS give a non-empty public reply. Use react-only for pure acknowledgments or social confirmations — never as the answer to a substantive question.");
 
   lines.push(`\n- **List all connectors**: \`curl ${gatewayUrl}/api/connectors\``);
   lines.push(`- Channel IDs and connector config can be found in \`~/.jinn/config.yaml\``);

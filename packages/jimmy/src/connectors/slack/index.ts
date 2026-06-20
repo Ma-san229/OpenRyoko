@@ -39,7 +39,7 @@ export class SlackConnector implements Connector {
   private readonly bootTimeMs = Date.now();
   private started = false;
   private lastError: string | null = null;
-  private channelNameCache = new Map<string, { name: string; cachedAt: number }>();
+  private channelNameCache = new Map<string, { name?: string; isExtShared: boolean; cachedAt: number }>();
   private userInfoCache = new Map<string, { info: SpeakerInfo; cachedAt: number }>();
   private botUserId: string | null = null;
   private typingIntervals = new Map<string, ReturnType<typeof setInterval>>();
@@ -263,22 +263,33 @@ export class SlackConnector implements Connector {
     }
   }
 
-  private async resolveChannelName(channelId: string): Promise<string | undefined> {
+  /**
+   * Resolve channel name and external-shared status in one cached call.
+   * `isExtShared` is true for Slack Connect (externally/org shared) channels —
+   * the delivery layer treats these (and unknowns) as "external" so the model's
+   * operator-facing notes are never posted there. See reply-disposition.ts.
+   */
+  private async resolveChannelInfo(channelId: string): Promise<{ name?: string; isExtShared: boolean }> {
     const cached = this.channelNameCache.get(channelId);
     if (cached && Date.now() - cached.cachedAt < SlackConnector.CHANNEL_CACHE_TTL_MS) {
-      return cached.name;
+      return { name: cached.name, isExtShared: cached.isExtShared };
     }
     try {
       const result = await this.app.client.conversations.info({ channel: channelId });
-      const name = result.channel?.name;
-      if (name) {
-        this.channelNameCache.set(channelId, { name, cachedAt: Date.now() });
-        return name;
-      }
+      const channel = result.channel as { name?: string; is_ext_shared?: boolean; is_org_shared?: boolean; is_shared?: boolean } | undefined;
+      const name = channel?.name;
+      const isExtShared = !!(channel?.is_ext_shared || channel?.is_org_shared || channel?.is_shared);
+      this.channelNameCache.set(channelId, { name, isExtShared, cachedAt: Date.now() });
+      return { name, isExtShared };
     } catch (err) {
-      logger.debug(`Failed to resolve channel name for ${channelId}: ${err}`);
+      logger.debug(`Failed to resolve channel info for ${channelId}: ${err}`);
     }
-    return undefined;
+    // Unknown → treat as external (safe): never assume a channel is private.
+    return { name: undefined, isExtShared: true };
+  }
+
+  private async resolveChannelName(channelId: string): Promise<string | undefined> {
+    return (await this.resolveChannelInfo(channelId)).name;
   }
 
   async start() {
@@ -353,12 +364,15 @@ export class SlackConnector implements Connector {
       }
 
       const slackUserId = (event as any).user as string;
-      const [channelName, speaker] = await Promise.all([
-        this.resolveChannelName((event as any).channel),
+      const [channelInfo, speaker] = await Promise.all([
+        this.resolveChannelInfo((event as any).channel),
         this.resolveSpeakerInfo(slackUserId),
       ]);
+      const channelName = channelInfo.name;
 
       const channelType = ((event as any).channel_type as string) || "channel";
+      // DM is never "external"; otherwise trust the Slack Connect flag.
+      const channelExternal = channelType !== "im" && channelInfo.isExtShared;
       const rawText = ((event as any).text || "") as string;
       const wasMentioned = !!this.botUserId && rawText.includes(`<@${this.botUserId}>`);
 
@@ -403,6 +417,7 @@ export class SlackConnector implements Connector {
         raw: event,
         transportMeta: {
           channelType,
+          channelExternal,
           team: ((event as any).team as string) || null,
           channelName: channelName || null,
           wasMentioned,
@@ -591,11 +606,12 @@ export class SlackConnector implements Connector {
         return;
       }
 
-      // Resolve channel name and reactor (speaker) in parallel
-      const [channelName, speaker] = await Promise.all([
-        this.resolveChannelName(channelId),
+      // Resolve channel name/external status and reactor (speaker) in parallel
+      const [channelInfo, speaker] = await Promise.all([
+        this.resolveChannelInfo(channelId),
         this.resolveSpeakerInfo(event.user),
       ]);
+      const channelName = channelInfo.name;
       const channelDisplay = channelName ? `#${channelName}` : channelId;
 
       // Build the prompt with reaction context
@@ -622,6 +638,7 @@ export class SlackConnector implements Connector {
         raw: event,
         transportMeta: {
           channelType: "channel",
+          channelExternal: channelInfo.isExtShared,
           team: null,
           channelName: channelName || null,
           ...this.speakerTransportFields(speaker, event.user),
