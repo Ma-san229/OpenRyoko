@@ -27,15 +27,34 @@ describe("synthesizeFromEngineConfig (backward-compat fallback)", () => {
     expect(reg.gemini.models[0].id).toBe("gemini-2.5-pro");
   });
 
-  it("uses per-engine effort semantics: claude flag (low/med/high), codex config (incl xhigh), gemini none", () => {
+  it("uses per-engine effort semantics: claude flag (low/med/high/xhigh), codex config (incl xhigh), gemini none", () => {
     const reg = synthesizeFromEngineConfig(cfg({}));
     expect(reg.claude.effortMechanism).toBe("claude-flag");
-    expect(reg.claude.models[0].effortLevels).toEqual(["low", "medium", "high"]);
+    expect(reg.claude.models[0].effortLevels).toEqual(["low", "medium", "high", "xhigh"]);
     expect(reg.codex.effortMechanism).toBe("codex-config");
     expect(reg.codex.models[0].effortLevels).toContain("xhigh");
     expect(reg.gemini.effortMechanism).toBe("none");
     expect(reg.gemini.models[0].supportsEffort).toBe(false);
     expect(reg.gemini.models[0].effortLevels).toEqual([]);
+  });
+
+  it("grants xhigh only to xhigh-capable claude models", () => {
+    const levelsFor = (model: string) =>
+      synthesizeFromEngineConfig(cfg({ claude: { bin: "claude", model } })).claude.models[0].effortLevels;
+
+    // aliases resolve to latest → xhigh
+    expect(levelsFor("opus")).toContain("xhigh");
+    expect(levelsFor("sonnet")).toContain("xhigh");
+    // explicit capable ids
+    expect(levelsFor("claude-opus-4-8")).toContain("xhigh");
+    expect(levelsFor("claude-opus-4-7")).toContain("xhigh");
+    expect(levelsFor("claude-sonnet-5")).toContain("xhigh");
+
+    // haiku and older pinned ids → no xhigh (clamped by resolveEffort)
+    expect(levelsFor("haiku")).toEqual(["low", "medium", "high"]);
+    expect(levelsFor("claude-haiku-4-5")).toEqual(["low", "medium", "high"]);
+    expect(levelsFor("claude-opus-4-6")).toEqual(["low", "medium", "high"]);
+    expect(levelsFor("claude-sonnet-4-6")).toEqual(["low", "medium", "high"]);
   });
 });
 

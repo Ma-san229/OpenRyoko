@@ -2,6 +2,19 @@
 
 > **バージョン体系について**: 2026.4.26 から日付ベース (`YYYY.M.D`) のCalVerに移行しました。npm semver の制約上、月・日の leading zero は付けません (例: 4月26日 → `2026.4.26`)。
 
+## [2026.7.1] - 2026-07-01
+
+### Features
+- **Claude Sonnet 5 対応**: `sonnet` エイリアスが解決する新モデル `claude-sonnet-5` をコスト推定表（headless / interactive 両方）と設定画面のモデル表記に追加。コンテキスト窓は既存の `sonnet` パターン一致で 1M に解決。
+- **Claude の effort デフォルトを `xhigh` に**: Sonnet 5 / Opus 4.7・4.8 が対応した `xhigh` を標準化。設定画面の Effort Level に「Extra High」を追加。合成レジストリはモデル能力に応じて `xhigh` の可否を判定し（Opus 4.7+ / Sonnet 5 のみ）、Haiku や旧 Opus/Sonnet では `resolveEffort` が安全に `medium` へクランプ。
+- **決定論的 config パッチ機構**: マイグレーションに `config-patch.json` を同梱すると、`ryoko update`（`ryoko migrate --auto`）が config.yaml のデフォルト値を**ユーザーのカスタマイズを壊さずに**追従更新（未設定→挿入 / 旧デフォルト一致→更新 / カスタム済み→スキップ、冪等）。2026.7.1 では `engines.claude.effortLevel: medium → xhigh` を適用。
+
+### Fixes
+- **interactive Claude のコスト計上**: エイリアス（`sonnet` 等）ではなくトランスクリプトの実モデルID（`claude-sonnet-5` 等）で料金を解決するようにし、Sonnet/Haiku が Opus 価格で過大計上される問題を修正。
+
+### Tests
+- jimmy: 521 tests pass（config パッチのセマンティクス・冪等・カスタム保護、出荷 patch の妥当性検証、モデル別 effort 能力判定の回帰テストを追加）。
+
 ## [2026.6.5] - 2026-06-03
 
 ### Features

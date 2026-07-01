@@ -3,7 +3,7 @@ import { resolveEffort } from "../effort.js";
 import { effortLevelsForModel, invalidateModelRegistry } from "../models.js";
 import type { JinnConfig } from "../types.js";
 
-const CLAUDE = ["low", "medium", "high"];
+const CLAUDE = ["low", "medium", "high", "xhigh"];
 const CODEX = ["low", "medium", "high", "xhigh"];
 
 describe("resolveEffort (registry-driven validation)", () => {
@@ -11,8 +11,12 @@ describe("resolveEffort (registry-driven validation)", () => {
     expect(resolveEffort({}, { parentSessionId: "p", effortLevel: "xhigh" }, null, CODEX)).toBe("xhigh");
   });
 
-  it("rejects xhigh for claude (not in its levels) and falls back to medium", () => {
-    expect(resolveEffort({}, { parentSessionId: "p", effortLevel: "xhigh" }, null, CLAUDE)).toBe("medium");
+  it("passes through claude xhigh (now supported on Opus 4.7+/Sonnet 5)", () => {
+    expect(resolveEffort({}, { parentSessionId: "p", effortLevel: "xhigh" }, null, CLAUDE)).toBe("xhigh");
+  });
+
+  it("rejects a level outside the valid set and falls back to medium", () => {
+    expect(resolveEffort({}, { parentSessionId: "p", effortLevel: "max" }, null, CLAUDE)).toBe("medium");
   });
 
   it("claude still accepts low/medium/high", () => {

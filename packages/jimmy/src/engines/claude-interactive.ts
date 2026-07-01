@@ -24,13 +24,28 @@ interface InteractiveArgsOpts {
   attachments?: string[];
 }
 
-interface TranscriptUsage { inputTokens: number; outputTokens: number; cacheTokens: number; assistantTurns: number; }
+interface TranscriptUsage { inputTokens: number; outputTokens: number; cacheTokens: number; assistantTurns: number; model?: string; }
+
+// Config stores short aliases (opus/sonnet/haiku); the CLI resolves them to
+// concrete ids. When the transcript doesn't carry a model id we fall back to
+// this map so pricing keys line up with MODEL_PRICES instead of DEFAULT_PRICE.
+const CLAUDE_ALIAS_TO_ID: Record<string, string> = {
+  opus: "claude-opus-4-8",
+  sonnet: "claude-sonnet-5",
+  haiku: "claude-haiku-4-5",
+};
+
+function resolveClaudeModelId(model: string | undefined): string | undefined {
+  if (!model) return undefined;
+  return CLAUDE_ALIAS_TO_ID[model] ?? model;
+}
 
 // $/million tokens. Conservative defaults. Older model ids kept so cost can still
 // be reconstructed when resuming historical transcripts.
 const MODEL_PRICES: Record<string, { in: number; out: number }> = {
   "claude-opus-4-8": { in: 15, out: 75 },
   "claude-opus-4-7": { in: 15, out: 75 },
+  "claude-sonnet-5": { in: 3, out: 15 },
   "claude-sonnet-4-6": { in: 3, out: 15 },
   "claude-haiku-4-5": { in: 1, out: 5 },
 };
@@ -60,6 +75,10 @@ function sumTranscriptUsage(content: string): TranscriptUsage {
     u.inputTokens += Number(usage.input_tokens ?? 0);
     u.outputTokens += Number(usage.output_tokens ?? 0);
     u.cacheTokens += Number(usage.cache_read_input_tokens ?? 0) + Number(usage.cache_creation_input_tokens ?? 0);
+    // Concrete model id (e.g. "claude-sonnet-5") emitted by the CLI — the most
+    // reliable pricing key. Last one wins if it ever changes mid-session.
+    const m = msg?.message?.model;
+    if (typeof m === "string" && m) u.model = m;
   }
   return u;
 }
@@ -88,7 +107,10 @@ function computeInteractiveCost(transcriptPath: string, model?: string): { cost:
   try { content = fs.readFileSync(transcriptPath, "utf-8"); } catch { return null; }
   const u = sumTranscriptUsage(content);
   if (u.assistantTurns === 0) return null;
-  const price = (model && MODEL_PRICES[model]) || DEFAULT_PRICE;
+  // Prefer the concrete id from the transcript; fall back to resolving the
+  // config alias (opus/sonnet/haiku) so Sonnet/Haiku aren't priced as Opus.
+  const modelId = u.model ?? resolveClaudeModelId(model);
+  const price = (modelId && MODEL_PRICES[modelId]) || DEFAULT_PRICE;
   const cost = (u.inputTokens / 1_000_000) * price.in + (u.outputTokens / 1_000_000) * price.out;
   return { cost, turns: u.assistantTurns };
 }

@@ -10,7 +10,7 @@ engines:
   claude:
     bin: claude
     model: opus
-    effortLevel: medium
+    effortLevel: xhigh
     # Interactive PTY mode (opt-in). When true, Claude work turns run as an
     # interactive PTY (cc_entrypoint=cli) which bills against the Max subscription
     # instead of metered API usage. Turns resolve via Claude Code Stop hooks.
