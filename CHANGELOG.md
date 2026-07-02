@@ -2,6 +2,18 @@
 
 > **バージョン体系について**: 2026.4.26 から日付ベース (`YYYY.M.D`) のCalVerに移行しました。npm semver の制約上、月・日の leading zero は付けません (例: 4月26日 → `2026.4.26`)。
 
+## [2026.7.4] - 2026-07-02
+
+### Features（upstream jinn 0.20〜0.23 から安定性4点セットを移植）
+- **StopFailure grace window（20秒）**: `server_error`/`invalid_request`/`unknown` 系の StopFailure を即失敗確定せず猶予保留。CLI が自力リトライして完走すれば後続の Stop が**成功で上書き**、ツールフック/SSE活動で猶予を再アーム、**サブエージェントのAPIリクエストが in-flight の間は失敗確定を延期**（サブエージェントのAPIエラーが親ターンを誤って失敗させる問題の根本修正）。`rate_limit`/`billing_error`/`authentication_failed`/`max_output_tokens` は従来どおり即確定。
+- **Lost-Stop recovery**: Stop フック自体が消失した場合（relay障害・gateway.json 差し替え等）、5分経過+60秒静穏+ツール/API非実行を条件に、**transcript から最終アシスタントメッセージを復元してターンを成功確定**。ターン終了後に結果テキストが空だった場合の transcript バックフィルも追加（「(no output)」返信の解消）。
+- **status-reconciler**: `status:"running"` のままスタックしたセッションを15秒ごとにスイープし、ハートビート45秒超過+実ターンなしを**2回連続**確認したら idle に自動復旧（完了イベント喪失の最終バックストップ）。transient retry の待機中は20秒ごとのハートビートで誤検知を防止。
+- **ネイティブコマンド処理**: `/compact`/`/clear`/`/model` 等（Stopフックを発火しない）は出力静穏ウィンドウで完了確定、`/usage`/`/limits` 等（Stop の last_assistant_message が**前ターンのテキスト**を載せてくる）は空で確定し、重複エコーの再投稿を防止。
+- その他: 思考ブロック（`<thinking>`等）が最終テキストに漏れた場合の除去、bracketed-paste 後の CR を 50ms→150ms（ペースト未消化で送信が落ちるレースの解消、upstream知見）。
+
+### Tests
+- jimmy: 562 tests pass（grace window の保留/上書き/再アーム/延期、transcript 復元ヘルパー、status-reconciler の2スイープ確定、ネイティブコマンド判定・空確定の回帰テストを追加）。
+
 ## [2026.7.3] - 2026-07-02
 
 ### Fixes（空気読みトリアージ — 「スタンプだけ返す」が機能しない問題）
