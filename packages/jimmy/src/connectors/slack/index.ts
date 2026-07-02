@@ -455,20 +455,23 @@ export class SlackConnector implements Connector {
         triageEnabled && channelType !== "im" && !wasMentioned
           ? this.conversations.isDmEquivalent(conversationKey)
           : false;
-      // Short-ack exception: the DM-equivalent fast path otherwise swallows the
-      // one situation react-triage is FOR — "ありがとう"/"了解" right after the
-      // bot replied (the bot having replied is what makes the conversation
-      // DM-equivalent). Send lexical short-ack candidates through triage in a
-      // 1:1-aware mode (react vs reply, never silent) so a bare thanks can get
-      // an emoji instead of a full engine turn. Everything else keeps the
-      // fast-path full reply.
+      // Short-ack exception: the always-reply fast paths (real DMs and
+      // DM-equivalent conversations) otherwise swallow the one situation
+      // react-triage is FOR — "ありがとう"/"了解" right after the bot replied
+      // (the bot having replied is what makes a conversation DM-equivalent).
+      // Send lexical short-ack candidates through triage in a 1:1-aware mode
+      // (react vs reply, never silent) so a bare thanks can get an emoji
+      // instead of a full engine turn. Everything else keeps the fast-path
+      // full reply. @-mentions always get a real reply, even short ones.
       const shortAckTriage =
-        isDmEquivalent && attachments.length === 0 && isShortAckCandidate(rawText);
+        (channelType === "im" || isDmEquivalent) &&
+        !wasMentioned &&
+        attachments.length === 0 &&
+        isShortAckCandidate(rawText);
       const skipTriage =
         !triageEnabled ||
-        channelType === "im" ||
         wasMentioned ||
-        (isDmEquivalent && !shortAckTriage);
+        ((channelType === "im" || isDmEquivalent) && !shortAckTriage);
 
       if (triageEnabled && isDmEquivalent && !shortAckTriage) {
         logger.info(`[slack] skipping triage — DM-equivalent conversation in ${(event as any).channel}`);
