@@ -28,6 +28,7 @@ import { resolveEffort } from "../shared/effort.js";
 import { effortLevelsForModel } from "../shared/models.js";
 import { computeNextRetryDelayMs, computeRateLimitDeadlineMs, detectRateLimit, isDeadSessionError, isPoisonedTranscriptError, isTransientServerError } from "../shared/rateLimit.js";
 import { getClaudeExpectedResetAt, isLikelyNearClaudeUsageLimit, recordClaudeRateLimit } from "../shared/usageAwareness.js";
+import { isOperatorSpeaker } from "../shared/operator-match.js";
 import { loadJobs } from "../cron/jobs.js";
 import { setCronJobEnabled, triggerCronJob } from "../cron/scheduler.js";
 import { checkBudget } from "../gateway/budgets.js";
@@ -452,6 +453,39 @@ export class SessionManager {
         const transcript = sinceMessages.slice(-20).join("\n\n");
         promptToRun =
           `We temporarily switched to GPT due to a Claude usage limit. Sync your context with this transcript (most recent last), then respond to the last USER message.\n\n${transcript}`;
+      }
+
+      // Per-message speaker attribution for group conversations. The system
+      // prompt names the speaker only at engine-spawn time — in a multi-user
+      // thread (or a warm-PTY follow-up from a DIFFERENT person) the model has
+      // no per-turn signal of who is talking and defaults to the conversation's
+      // habitual addressee, which is how non-operators got addressed as the
+      // operator. Skipped for DMs (1:1 is unambiguous), cron (no speaker), and
+      // slash-command prompts (a prefix would break native-command detection).
+      {
+        const speakerMeta = (msg.transportMeta ?? {}) as Record<string, unknown>;
+        const str = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v : undefined);
+        const prefixName = str(speakerMeta.speakerName);
+        if (
+          decorateMessages &&
+          prefixName &&
+          speakerMeta.channelType !== "im" &&
+          !promptToRun.trimStart().startsWith("/")
+        ) {
+          const isOp = isOperatorSpeaker(
+            [prefixName, str(speakerMeta.speakerRealName), str(speakerMeta.speakerDisplayName), str(speakerMeta.speakerHandle)],
+            this.config.portal?.operatorName,
+            this.config.portal?.operatorAliases,
+          );
+          const safeName = prefixName.replace(/[\[\]\r\n]/g, "").slice(0, 60);
+          const operator = this.config.portal?.operatorName?.trim();
+          const tag = operator
+            ? isOp
+              ? " (the operator)"
+              : ` — NOT the operator; do not address this person as "${operator}"`
+            : "";
+          promptToRun = `[Speaker: ${safeName}${tag}]\n${promptToRun}`;
+        }
       }
 
       // Budget enforcement — check BEFORE engine.run()
