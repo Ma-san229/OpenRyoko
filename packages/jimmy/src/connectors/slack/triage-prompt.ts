@@ -29,6 +29,10 @@ export interface TriagePromptInput {
   recentThread: Array<{ speaker: string; text: string }>;
   /** The message being triaged */
   messageText: string;
+  /** True when this is an established 1:1 conversation with the bot (DM-equivalent):
+   *  the message IS implicitly addressed to the bot, so the decision space is
+   *  react-vs-reply — "silent" (ghosting) is not acceptable here. */
+  dmEquivalent?: boolean;
 }
 
 export interface TriageDecision {
@@ -40,6 +44,29 @@ export interface TriageDecision {
 const MAX_MESSAGE_CHARS = 2000;
 const MAX_THREAD_ITEM_CHARS = 300;
 const MAX_THREAD_ITEMS = 10;
+
+/** Upper bound (code points) for a message to qualify as a short-ack candidate. */
+export const SHORT_ACK_MAX_CHARS = 30;
+
+/**
+ * Cheap lexical pre-filter for the DM-equivalent short-ack exception: does this
+ * message LOOK like it could be a bare acknowledgment ("ありがとう", "了解",
+ * "OK") rather than a request? Candidates are sent through LLM triage (which
+ * may still answer "reply"); non-candidates skip triage and get a full reply,
+ * exactly as before. Deliberately conservative — a question mark, link,
+ * mention, or slash command disqualifies, because those always deserve a real
+ * response and shouldn't even risk a react-only outcome.
+ */
+export function isShortAckCandidate(text: string): boolean {
+  const t = (text ?? "").trim();
+  if (!t) return false;
+  if ([...t].length > SHORT_ACK_MAX_CHARS) return false;
+  if (/[?？]/.test(t)) return false;
+  if (/https?:\/\//.test(t)) return false;
+  if (/<[@#!]/.test(t)) return false; // user/channel/special mentions
+  if (t.startsWith("/")) return false; // control slash commands
+  return true;
+}
 
 export function buildTriagePrompt(input: TriagePromptInput): string {
   const {
@@ -53,6 +80,7 @@ export function buildTriagePrompt(input: TriagePromptInput): string {
     wasMentioned,
     recentThread,
     messageText,
+    dmEquivalent,
   } = input;
 
   const personaBlock = persona?.trim()
@@ -103,7 +131,8 @@ ${operatorBlock}
 # Current context
 - Channel: ${channelDescription} (type: ${channelType})
 - Speaker: ${speakerName} — ${speakerRole}
-- Was ${botName} explicitly @-mentioned in this message? ${wasMentioned ? "YES" : "no"}
+- Was ${botName} explicitly @-mentioned in this message? ${wasMentioned ? "YES" : "no"}${dmEquivalent ? `
+- Established 1:1 conversation: YES — ${botName} has been engaged here and no third party has joined. The message IS implicitly addressed to ${botName}.` : ""}
 
 # Recent thread (for context only — not the message to triage)
 ${threadBlock}
@@ -113,7 +142,17 @@ ${threadBlock}
 ${truncatedMessage}
 """
 
-# Decision rules (apply in order, stop at first match)
+${dmEquivalent ? `# Decision rules (1:1 conversation — the message IS addressed to ${botName}; NEVER choose "silent")
+1. If the message is ONLY a short acknowledgment, thanks, or affirmation that CLOSES the exchange
+   (e.g. "ありがとう", "thanks", "了解です", "OK", "なるほど", "助かりました", "👍") → "react" with a fitting emoji.
+2. ANYTHING else → "reply". This includes questions, instructions, go-aheads and continuations
+   ("GO", "続けて", "お願いします", "やって"), a "はい"/"OK" that answers a question ${botName} asked
+   (check the recent thread — if ${botName}'s last message asked something or offered to proceed,
+   the acknowledgment is a go-ahead → "reply"), corrections, feedback expecting action, or new information.
+
+# Principles (these override the rules when in tension)
+- A missed request is far worse than a redundant reply here. When unsure → "reply".
+- Choose "react" only when a single emoji FULLY satisfies the message and no action is expected.` : `# Decision rules (apply in order, stop at first match)
 1. If the message is a short acknowledgment, thanks, or affirmation directed at ${botName}'s prior reply
    (e.g. "ありがとう", "thanks", "了解", "OK", "なるほど", "👍") → "react" with a fitting emoji.
 2. If the message is clearly addressed to ${botName} (called by name, imperative aimed at the bot,
@@ -127,7 +166,7 @@ ${truncatedMessage}
 - Never butt into casual chat between other people. If the conversation is not for you, stay silent.
 - Do not reply just to be polite or to say "I see" / "interesting" — add value or stay out.
 - If your confidence that ${botName} should speak is below ~60%, choose "silent".
-- Prefer "react" over "reply" for pure acknowledgments. A single emoji is often enough.
+- Prefer "react" over "reply" for pure acknowledgments. A single emoji is often enough.`}
 
 # Output
 Produce the JSON object now. Do not explain. Do not wrap in a code block. JSON only.`;

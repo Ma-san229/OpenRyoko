@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   buildTriagePrompt,
   parseTriageDecision,
+  isShortAckCandidate,
   type TriagePromptInput,
 } from "../triage-prompt.js";
 
@@ -117,5 +118,52 @@ describe("parseTriageDecision", () => {
     const longReason = "x".repeat(500);
     const d = parseTriageDecision(`{"action":"silent","reason":"${longReason}"}`);
     expect(d?.reason?.length).toBeLessThanOrEqual(120);
+  });
+});
+
+describe("dmEquivalent mode (short-ack exception)", () => {
+  it("switches to 1:1 react-vs-reply rules and forbids silent", () => {
+    const prompt = buildTriagePrompt(baseInput({ dmEquivalent: true, messageText: "ありがとう" }));
+    expect(prompt).toContain("Established 1:1 conversation: YES");
+    expect(prompt).toContain('NEVER choose "silent"');
+    expect(prompt).toContain("go-ahead");
+    // The ambient-mode principles must be gone — they contradict 1:1 mode.
+    expect(prompt).not.toContain("Err on the side of SILENCE");
+  });
+
+  it("keeps the ambient rules when dmEquivalent is not set", () => {
+    const prompt = buildTriagePrompt(baseInput());
+    expect(prompt).toContain("Err on the side of SILENCE");
+    expect(prompt).not.toContain("Established 1:1 conversation");
+  });
+});
+
+describe("isShortAckCandidate", () => {
+  it("accepts bare acknowledgments", () => {
+    for (const t of ["ありがとう", "了解です", "OK", "thanks!", "なるほど", "助かりました🙏", "GO", "はい"]) {
+      expect(isShortAckCandidate(t), t).toBe(true);
+    }
+  });
+
+  it("rejects questions, links, mentions, slash commands, long or empty text", () => {
+    const cases = [
+      "これどう思う？",
+      "why though?",
+      "https://example.com を見て",
+      "<@U123> ありがとう",
+      "<#C123> でお願い",
+      "/status",
+      "",
+      "   ",
+      "この件について詳しく調査して、レポートにまとめてもらえると助かります",
+    ];
+    for (const t of cases) {
+      expect(isShortAckCandidate(t), JSON.stringify(t)).toBe(false);
+    }
+  });
+
+  it("counts code points, not UTF-16 units (30-char boundary)", () => {
+    expect(isShortAckCandidate("あ".repeat(30))).toBe(true);
+    expect(isShortAckCandidate("あ".repeat(31))).toBe(false);
   });
 });

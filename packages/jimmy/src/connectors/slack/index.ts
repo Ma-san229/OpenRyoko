@@ -13,6 +13,7 @@ import { buildReplyContext, deriveSessionKey, isOldSlackMessage } from "./thread
 import { formatResponse, downloadAttachment } from "./format.js";
 import { normalizeSpeakerInfo, type SpeakerInfo } from "./speaker.js";
 import { runTriage } from "./triage.js";
+import { isShortAckCandidate } from "./triage-prompt.js";
 import { ConversationTracker } from "./conversation-tracker.js";
 import { AgentsCanvasUpdater } from "./agents-canvas.js";
 import { extractGoalCondition, shouldExtractGoal } from "./goal-extractor.js";
@@ -173,6 +174,8 @@ export class SlackConnector implements Connector {
       channelName?: string;
       wasMentioned: boolean;
       messageText: string;
+      /** Short-ack in an established 1:1 conversation — triage runs in react-vs-reply mode. */
+      dmEquivalent?: boolean;
     },
   ): Promise<{ action: "silent" | "react" | "reply"; emoji?: string; reason?: string }> {
     const threadLimit = this.triageConfig?.threadContextLimit ?? 10;
@@ -205,18 +208,20 @@ export class SlackConnector implements Connector {
         wasMentioned: ctx.wasMentioned,
         recentThread,
         messageText: ctx.messageText,
+        dmEquivalent: ctx.dmEquivalent,
       },
       {
         bin: this.triageConfig?.bin,
         engine: this.triageConfig?.engine,
         model: this.triageConfig?.model,
         timeoutMs: this.triageConfig?.timeoutMs,
-        // Triage only runs for ambient messages (not DM, not @-mention, not
-        // active thread). When we know our own ID, a fail-open *reply* there
-        // is a guaranteed barge-in, so stay silent. Keep the legacy reply
-        // fallback only as a safety net for the startup-race case where
-        // auth.test never resolved our botUserId.
-        failOpenAction: this.botUserId ? "silent" : "reply",
+        // Ambient messages (not DM, not @-mention, not active thread): when we
+        // know our own ID, a fail-open *reply* is a guaranteed barge-in, so stay
+        // silent; the legacy reply fallback only covers the startup race where
+        // auth.test never resolved our botUserId. DM-equivalent short-acks are
+        // the opposite — the message IS addressed to us, so a triage failure
+        // must fall back to the full reply, never to ghosting.
+        failOpenAction: ctx.dmEquivalent || !this.botUserId ? "reply" : "silent",
       },
     );
   }
@@ -450,13 +455,22 @@ export class SlackConnector implements Connector {
         triageEnabled && channelType !== "im" && !wasMentioned
           ? this.conversations.isDmEquivalent(conversationKey)
           : false;
+      // Short-ack exception: the DM-equivalent fast path otherwise swallows the
+      // one situation react-triage is FOR — "ありがとう"/"了解" right after the
+      // bot replied (the bot having replied is what makes the conversation
+      // DM-equivalent). Send lexical short-ack candidates through triage in a
+      // 1:1-aware mode (react vs reply, never silent) so a bare thanks can get
+      // an emoji instead of a full engine turn. Everything else keeps the
+      // fast-path full reply.
+      const shortAckTriage =
+        isDmEquivalent && attachments.length === 0 && isShortAckCandidate(rawText);
       const skipTriage =
         !triageEnabled ||
         channelType === "im" ||
         wasMentioned ||
-        isDmEquivalent;
+        (isDmEquivalent && !shortAckTriage);
 
-      if (triageEnabled && isDmEquivalent) {
+      if (triageEnabled && isDmEquivalent && !shortAckTriage) {
         logger.info(`[slack] skipping triage — DM-equivalent conversation in ${(event as any).channel}`);
       }
 
@@ -467,11 +481,18 @@ export class SlackConnector implements Connector {
           channelName: channelName ?? undefined,
           wasMentioned,
           messageText: rawText,
+          dmEquivalent: shortAckTriage,
         });
 
         if (decision.action === "silent") {
-          logger.info(`[slack] triage → silent (${decision.reason ?? "no reason"}) for ts=${(event as any).ts}`);
-          return;
+          if (shortAckTriage) {
+            // 1:1 conversation — the message IS addressed to the bot; ghosting is
+            // not acceptable. Treat a stray "silent" as the pre-exception behavior.
+            logger.info(`[slack] triage → silent in DM-equivalent short-ack path — upgrading to reply for ts=${(event as any).ts}`);
+          } else {
+            logger.info(`[slack] triage → silent (${decision.reason ?? "no reason"}) for ts=${(event as any).ts}`);
+            return;
+          }
         }
         if (decision.action === "react") {
           const emoji = decision.emoji || "eyes";
