@@ -27,10 +27,49 @@ const EFFORT_MECHANISM: Record<EngineName, EffortMechanism> = {
 
 /** Conservative per-engine defaults used when synthesizing (no `models:` block). */
 const SYNTH_DEFAULTS: Record<EngineName, { supportsEffort: boolean; effortLevels: string[]; fallbackModel: string }> = {
-  claude: { supportsEffort: true, effortLevels: ["low", "medium", "high"], fallbackModel: "opus" },
+  claude: { supportsEffort: true, effortLevels: ["low", "medium", "high", "xhigh"], fallbackModel: "opus" },
   codex: { supportsEffort: true, effortLevels: ["low", "medium", "high", "xhigh"], fallbackModel: "gpt-5.3-codex" },
   gemini: { supportsEffort: false, effortLevels: [], fallbackModel: "gemini-2.5-pro" },
 };
+
+/**
+ * Whether a Claude model supports the `xhigh` effort level. `xhigh` landed on
+ * Opus 4.7 and Sonnet 5; Haiku-tier and *older* Opus/Sonnet (Opus ≤4.6,
+ * Sonnet ≤4.6) reject it. The bare aliases `opus`/`sonnet` resolve to the
+ * latest model, which supports it. Anything unrecognized is treated as
+ * unsupported (conservative), so `resolveEffort` clamps it instead of passing
+ * a broken `--effort xhigh` to the CLI.
+ */
+function claudeSupportsXhigh(modelId: string): boolean {
+  const id = modelId.toLowerCase();
+  if (id.includes("haiku")) return false;
+  if (id === "opus" || id === "sonnet") return true; // aliases → latest model
+  if (/opus-4-(?:[7-9]|\d\d)/.test(id)) return true; // Opus 4.7+ (incl. 4.10+)
+  if (/opus-(?:[5-9]|\d\d)/.test(id)) return true; //  Opus 5+
+  if (/sonnet-(?:[5-9]|\d\d)/.test(id)) return true; // Sonnet 5+
+  return false;
+}
+
+/**
+ * Effort levels for a synthesized Claude model. Offering `xhigh` on a model
+ * that rejects it would let a config default flow through as `--effort xhigh`
+ * and break the run, so narrow by capability.
+ */
+function claudeEffortLevels(modelId: string): string[] {
+  const base = ["low", "medium", "high"];
+  return claudeSupportsXhigh(modelId) ? [...base, "xhigh"] : base;
+}
+
+/** Effort levels a synthesized (no `models:` block) entry gives a specific model. */
+function synthEffortLevels(engine: EngineName, modelId: string): string[] {
+  const d = SYNTH_DEFAULTS[engine];
+  if (!d.supportsEffort) return [];
+  return engine === "claude" ? claudeEffortLevels(modelId) : [...d.effortLevels];
+}
+
+function isEngineName(engine: string): engine is EngineName {
+  return (ENGINE_NAMES as readonly string[]).includes(engine);
+}
 
 let cached: ModelRegistry | null = null;
 
@@ -54,11 +93,22 @@ export function getModelRegistry(config: JinnConfig): ModelRegistry {
 export function effortLevelsForModel(config: JinnConfig, engine: string, modelId?: string): string[] {
   const entry = getModelRegistry(config)[engine];
   if (!entry) return [];
-  const model =
-    (modelId ? entry.models.find((m) => m.id === modelId) : undefined) ??
-    entry.models.find((m) => m.id === entry.defaultModel) ??
-    entry.models[0];
-  return model?.supportsEffort ? [...model.effortLevels] : [];
+
+  const exact = modelId ? entry.models.find((m) => m.id === modelId) : undefined;
+  if (exact) return exact.supportsEffort ? [...exact.effortLevels] : [];
+
+  // modelId not in the registry (e.g. a session overrides the engine model to
+  // one that isn't the config default). For a SYNTHESIZED engine (no explicit
+  // `models:` block) compute levels for THIS model rather than borrowing the
+  // default model's — otherwise a haiku session inherits opus's `xhigh` and
+  // passes an unsupported `--effort xhigh` through. When a `models:` block
+  // exists the user declared exact levels, so keep the default-model fallback.
+  if (modelId && isEngineName(engine) && !config.models?.[engine]) {
+    return synthEffortLevels(engine, modelId);
+  }
+
+  const fallback = entry.models.find((m) => m.id === entry.defaultModel) ?? entry.models[0];
+  return fallback?.supportsEffort ? [...fallback.effortLevels] : [];
 }
 
 /** Context window (tokens) for a session's engine+model, or undefined if unknown. */
@@ -99,7 +149,7 @@ export function synthesizeFromEngineConfig(config: JinnConfig): ModelRegistry {
       id: modelId,
       label: modelId,
       supportsEffort: defaults.supportsEffort,
-      effortLevels: defaults.supportsEffort ? [...defaults.effortLevels] : [],
+      effortLevels: synthEffortLevels(name, modelId),
     };
     registry[name] = {
       name,

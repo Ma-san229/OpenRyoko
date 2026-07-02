@@ -12,6 +12,7 @@ import {
   accumulateSessionCost,
   createSession,
   deleteSession,
+  getSession,
   getSessionBySessionKey,
   getMessages,
   insertMessage,
@@ -25,7 +26,7 @@ import { JINN_HOME } from "../shared/paths.js";
 import { logger } from "../shared/logger.js";
 import { resolveEffort } from "../shared/effort.js";
 import { effortLevelsForModel } from "../shared/models.js";
-import { computeNextRetryDelayMs, computeRateLimitDeadlineMs, detectRateLimit, isDeadSessionError, isPoisonedTranscriptError } from "../shared/rateLimit.js";
+import { computeNextRetryDelayMs, computeRateLimitDeadlineMs, detectRateLimit, isDeadSessionError, isPoisonedTranscriptError, isTransientServerError } from "../shared/rateLimit.js";
 import { getClaudeExpectedResetAt, isLikelyNearClaudeUsageLimit, recordClaudeRateLimit } from "../shared/usageAwareness.js";
 import { loadJobs } from "../cron/jobs.js";
 import { setCronJobEnabled, triggerCronJob } from "../cron/scheduler.js";
@@ -262,6 +263,80 @@ export class SessionManager {
       isDM,
       canReact: capabilities.reactions,
     };
+  }
+
+  /**
+   * Handle a hook that arrived with no turn in flight (see
+   * HookRegistry.setOrphanHandler). A Stop orphan carries the final message of
+   * autonomous post-turn work — a background sub-agent or task that finished
+   * AFTER the turn settled (or after a turn timeout/StopFailure). Without this,
+   * that output was buffered 30s and dropped: the work completed but the reply
+   * never reached the user. Deliver it to the session's conversation and notify
+   * the parent session, mirroring the tail of runSession's delivery path.
+   * Fire-and-forget; must never throw (hook endpoint calls into this).
+   */
+  async handleOrphanHook(sessionId: string, hook: { hook_event_name: string; last_assistant_message?: unknown; error?: unknown }): Promise<void> {
+    try {
+      if (this.config.sessions?.backgroundDelivery === false) return;
+      const session = getSession(sessionId);
+      if (!session) return;
+
+      if (hook.hook_event_name === "StopFailure") {
+        // Background continuation failed — record it for operators, but don't
+        // post to the channel (nothing was promised; avoid error spam during
+        // upstream incidents).
+        const err = typeof hook.error === "string" ? hook.error : "unknown";
+        logger.warn(`Orphan StopFailure for session ${sessionId}: ${err}`);
+        updateSession(sessionId, { lastActivity: new Date().toISOString(), lastError: `Background turn failed: ${err}` });
+        return;
+      }
+      if (hook.hook_event_name !== "Stop") return;
+
+      const text = typeof hook.last_assistant_message === "string" ? hook.last_assistant_message.trim() : "";
+      if (!text) return;
+
+      // A turn may have started between the orphan arriving and this handler
+      // running — its resolver owns delivery now; don't double-post.
+      const engine = this.engines.get(session.engine) as (Engine & { isTurnRunning?: (id: string) => boolean }) | undefined;
+      if (engine?.isTurnRunning?.(session.id)) return;
+
+      // Dedupe: identical to the message we already delivered → nothing new.
+      const history = getMessages(session.id);
+      const lastAssistant = [...history].reverse().find((m) => m.role === "assistant");
+      if (lastAssistant?.content === text) return;
+
+      insertMessage(session.id, "assistant", text);
+      const updated = updateSession(session.id, {
+        lastActivity: new Date().toISOString(),
+        ...(session.status !== "running" ? { status: "idle" as const, lastError: null } : {}),
+      }) ?? session;
+
+      logger.info(`Delivering background completion for session ${sessionId} (${text.length} chars)`);
+
+      const connector = session.connector ? this.connectorProvider().get(session.connector) : undefined;
+      if (connector && session.replyContext) {
+        const target = connector.reconstructTarget(session.replyContext);
+        const meta = (session.transportMeta ?? {}) as Record<string, unknown>;
+        const isDM = meta.channelType === "im";
+        const ctx: DeliveryContext = {
+          // Unsolicited follow-up: never force a SAFE_ACK, just sanitize.
+          addressed: false,
+          channelExternal: isDM ? false : meta.channelExternal === undefined ? true : meta.channelExternal === true,
+          isDM,
+          canReact: connector.getCapabilities().reactions,
+        };
+        const { publicAction } = normalizeDelivery(text, ctx);
+        await deliverPublic(connector, target, publicAction).catch((err) => {
+          logger.warn(`Background completion delivery failed for ${sessionId}: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      }
+
+      // Child (sub-)session: this late completion IS the "完了通知" the parent
+      // was waiting for.
+      notifyParentSession(updated, { result: text });
+    } catch (err) {
+      logger.warn(`handleOrphanHook failed for ${sessionId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   private async runSession(
@@ -518,6 +593,52 @@ export class SessionManager {
         isDead = !wasInterrupted && isDeadSessionError(result);
         if (isDead) {
           logger.error(`Retry with fresh session for ${session.id} also reported dead-session; giving up`);
+        }
+      }
+
+      // Transient Anthropic server error (5xx/529): the CLI already retried
+      // in-process for minutes and gave up. The engine session's history is
+      // intact, so wait out the incident with backoff and re-drive the SAME
+      // session with a continuation prompt instead of surfacing a hard error.
+      // Runs BEFORE rate-limit detection so a retry that ends rate-limited
+      // still flows into the normal wait/fallback machinery below.
+      if (!wasInterrupted && !isDead && !isPoisoned && isTransientServerError(result)) {
+        const delays = this.config.sessions?.transientRetryDelaysMs ?? [30_000, 120_000, 300_000];
+        if (delays.length > 0) {
+          await connector.replyMessage(
+            target,
+            "⚠️ Anthropic API is temporarily unavailable (server error). I'll retry automatically — no action needed.",
+          ).catch(() => {});
+        }
+        for (const [i, delayMs] of delays.entries()) {
+          logger.warn(
+            `Session ${session.id} hit a transient server error — retry ${i + 1}/${delays.length} in ${Math.round(delayMs / 1000)}s`,
+          );
+          updateSession(session.id, { status: "running", lastActivity: new Date().toISOString() });
+          await new Promise((r) => setTimeout(r, delayMs));
+          const resumeId = result.sessionId?.trim() || session.engineSessionId || undefined;
+          result = await engine.run({
+            prompt:
+              "The previous response was interrupted by a temporary Anthropic API server error. " +
+              "The conversation history up to that point is intact. Continue and complete the original request now. " +
+              "If the work was already finished, reply with the final result.",
+            resumeSessionId: resumeId,
+            systemPrompt,
+            cwd: JINN_HOME,
+            bin: engineConfig.bin,
+            model: session.model ?? engineConfig.model,
+            effortLevel,
+            cliFlags: employee?.cliFlags,
+            sshHost: employee?.sshHost,
+            remoteCwd: employee?.remoteCwd,
+            mcpConfigPath,
+            sessionId: session.id,
+          });
+          wasInterrupted = result.error?.startsWith("Interrupted");
+          if (wasInterrupted || !isTransientServerError(result)) break;
+        }
+        if (!wasInterrupted && isTransientServerError(result)) {
+          logger.error(`Session ${session.id} still failing with server errors after ${delays.length} retries — giving up`);
         }
       }
 

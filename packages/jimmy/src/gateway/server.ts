@@ -185,6 +185,10 @@ export async function startGateway(
         hookRegistry?.unregister(id);
         cleanupSessionSettings(CLAUDE_SETTINGS_DIR, id);
       },
+      // Never reap/evict a PTY whose claude is mid-API-call (background
+      // sub-agents keep streaming after the managed turn settles). Lazily bound:
+      // the engine is constructed a few lines below.
+      isBusy: (id) => interactiveClaudeEngine?.isEngineBusy(id) ?? false,
     });
     // Pass the headless engine as a remote fallback so sshHost employees still run
     // over SSH (the local PTY can't), while local turns get the Max-subsidized PTY.
@@ -234,6 +238,15 @@ export async function startGateway(
 
   // Session manager
   const sessionManager = new SessionManager(config, engines, connectorNames);
+
+  // Orphan hooks = engine activity AFTER a turn settled (background sub-agents /
+  // tasks still running in the PTY). Any orphan event keeps the PTY alive; a
+  // terminal Stop orphan is the final output of that background work and gets
+  // delivered to the session's conversation instead of being dropped.
+  hookRegistry?.setOrphanHandler((sid, hook) => {
+    interactiveClaudeEngine?.noteBackgroundActivity(sid);
+    void sessionManager.handleOrphanHook(sid, hook);
+  });
 
   // Build employee registry
   let employeeRegistry = scanOrg();

@@ -72,6 +72,23 @@ export function isDeadSessionError(result: EngineResult): boolean {
   return false;
 }
 
+/**
+ * Transient upstream failure: the interactive engine's Stop hook reported
+ * `server_error` — Anthropic returned 5xx/529 and the CLI exhausted its own
+ * in-process retries (~minutes). Unlike a rate limit there is no reset time and
+ * unlike a dead session the conversation history is intact, so the correct
+ * recovery is to wait briefly and re-drive the SAME engine session with a
+ * continuation prompt. Scoped narrowly to the interactive marker so headless
+ * engine error handling is unchanged.
+ */
+const TRANSIENT_SERVER_ERROR_RE = /Interactive turn failed: server_error/i;
+
+export function isTransientServerError(result: EngineResult): boolean {
+  if (!result.error) return false;
+  if (result.rateLimit?.status) return false;
+  return TRANSIENT_SERVER_ERROR_RE.test(result.error);
+}
+
 export function detectRateLimit(result: EngineResult): RateLimitDetection {
   const resetsAt = typeof result.rateLimit?.resetsAt === "number"
     ? result.rateLimit.resetsAt

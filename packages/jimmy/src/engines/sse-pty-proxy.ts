@@ -131,6 +131,12 @@ export class SsePtyProxy {
   /** Fingerprint of the top-level (main) agent's system prompt, captured from the
    *  first classifiable request. Streams whose system prompt differs are sub-agents. */
   private mainSystemFp: string | null = null;
+  /** Upstream requests currently streaming through this proxy. Non-zero means the
+   *  claude behind this PTY is mid-API-call (main agent OR a sub-agent). */
+  private inflightCount = 0;
+  /** Epoch ms of the most recent upstream activity (request start, response
+   *  bytes, or completion). 0 until the first request. */
+  private lastUpstreamActivityAt = 0;
 
   private readonly requestFn: UpstreamRequestFn;
   private readonly upstreamHost: string;
@@ -174,11 +180,23 @@ export class SsePtyProxy {
     try { this.server.close(); } catch { /* already closed */ }
   }
 
+  /** True while the claude behind this PTY is demonstrably working: an upstream
+   *  request is in flight, or one finished within `recentMs`. Used by the PTY
+   *  lifecycle so the keep-warm reaper never kills a PTY mid-background-work
+   *  (tool executions between API calls produce short gaps — `recentMs` bridges
+   *  them). */
+  isBusy(recentMs: number): boolean {
+    if (this.inflightCount > 0) return true;
+    return this.lastUpstreamActivityAt > 0 && Date.now() - this.lastUpstreamActivityAt < recentMs;
+  }
+
   private handle(req: http.IncomingMessage, res: http.ServerResponse): void {
     const chunks: Buffer[] = [];
     // Holder (not a plain `let`) so the req-close handler always destroys the
     // CURRENT in-flight upstream even after a retry swapped it out.
     const inflight: { current?: http.ClientRequest } = {};
+    // True from req 'end' (in-flight count incremented) until res 'close'.
+    let counted = false;
     req.on("data", (c: Buffer) => chunks.push(c));
     req.on("error", () => { try { res.destroy(); } catch { /* ignore */ } });
     // Client (the claude CLI) hung up mid-turn — abort the in-flight upstream so
@@ -190,8 +208,18 @@ export class SsePtyProxy {
     // "client went away before we finished" signal.
     res.on("close", () => {
       if (!res.writableFinished) { try { inflight.current?.destroy(); } catch { /* ignore */ } }
+      // 'close' fires exactly once per response (finished or aborted) — the
+      // symmetric end of the in-flight window opened at req 'end'.
+      if (counted) {
+        counted = false;
+        this.inflightCount = Math.max(0, this.inflightCount - 1);
+        this.lastUpstreamActivityAt = Date.now();
+      }
     });
     req.on("end", () => {
+      counted = true;
+      this.inflightCount += 1;
+      this.lastUpstreamActivityAt = Date.now();
       const body = Buffer.concat(chunks);
       // Classify once per request: main agent (untagged) vs Task sub-agent (tagged
       // with a stable id so the chat pane routes it into a card). Decided from the
@@ -238,6 +266,7 @@ export class SsePtyProxy {
         const isSSE = String(uRes.headers["content-type"] || "").includes("text/event-stream");
         let sseBuf = "";
         uRes.on("data", (chunk: Buffer) => {
+          this.lastUpstreamActivityAt = Date.now();
           // Forward UNCHANGED to the client first (never let parsing affect the stream).
           try { res.write(chunk); } catch { /* client gone */ }
           if (isSSE) sseBuf = this.parseSse(sseBuf + chunk.toString("utf-8"), ctx);

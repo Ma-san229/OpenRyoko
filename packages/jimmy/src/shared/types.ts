@@ -562,6 +562,15 @@ export interface JinnConfig {
     rateLimitStrategy?: "wait" | "fallback";
     /** Engine to use when rateLimitStrategy="fallback". Default: "codex" */
     fallbackEngine?: "codex";
+    /** Backoff delays (ms) between automatic retries after a transient Anthropic
+     *  server error (5xx/529) ended a turn. One retry per entry, resuming the
+     *  same engine session with a continuation prompt. Default: [30s, 120s, 300s].
+     *  Set to [] to disable. */
+    transientRetryDelaysMs?: number[];
+    /** Deliver late/background engine output (a Stop hook that fires after the
+     *  turn already settled — e.g. a background sub-agent finishing) back to the
+     *  session's conversation. Default: true. */
+    backgroundDelivery?: boolean;
   };
   cron?: {
     defaultDelivery?: CronDelivery;

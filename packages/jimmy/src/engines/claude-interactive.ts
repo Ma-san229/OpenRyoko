@@ -24,13 +24,28 @@ interface InteractiveArgsOpts {
   attachments?: string[];
 }
 
-interface TranscriptUsage { inputTokens: number; outputTokens: number; cacheTokens: number; assistantTurns: number; }
+interface TranscriptUsage { inputTokens: number; outputTokens: number; cacheTokens: number; assistantTurns: number; model?: string; }
+
+// Config stores short aliases (opus/sonnet/haiku); the CLI resolves them to
+// concrete ids. When the transcript doesn't carry a model id we fall back to
+// this map so pricing keys line up with MODEL_PRICES instead of DEFAULT_PRICE.
+const CLAUDE_ALIAS_TO_ID: Record<string, string> = {
+  opus: "claude-opus-4-8",
+  sonnet: "claude-sonnet-5",
+  haiku: "claude-haiku-4-5",
+};
+
+function resolveClaudeModelId(model: string | undefined): string | undefined {
+  if (!model) return undefined;
+  return CLAUDE_ALIAS_TO_ID[model] ?? model;
+}
 
 // $/million tokens. Conservative defaults. Older model ids kept so cost can still
 // be reconstructed when resuming historical transcripts.
 const MODEL_PRICES: Record<string, { in: number; out: number }> = {
   "claude-opus-4-8": { in: 15, out: 75 },
   "claude-opus-4-7": { in: 15, out: 75 },
+  "claude-sonnet-5": { in: 3, out: 15 },
   "claude-sonnet-4-6": { in: 3, out: 15 },
   "claude-haiku-4-5": { in: 1, out: 5 },
 };
@@ -60,6 +75,10 @@ function sumTranscriptUsage(content: string): TranscriptUsage {
     u.inputTokens += Number(usage.input_tokens ?? 0);
     u.outputTokens += Number(usage.output_tokens ?? 0);
     u.cacheTokens += Number(usage.cache_read_input_tokens ?? 0) + Number(usage.cache_creation_input_tokens ?? 0);
+    // Concrete model id (e.g. "claude-sonnet-5") emitted by the CLI — the most
+    // reliable pricing key. Last one wins if it ever changes mid-session.
+    const m = msg?.message?.model;
+    if (typeof m === "string" && m) u.model = m;
   }
   return u;
 }
@@ -88,7 +107,10 @@ function computeInteractiveCost(transcriptPath: string, model?: string): { cost:
   try { content = fs.readFileSync(transcriptPath, "utf-8"); } catch { return null; }
   const u = sumTranscriptUsage(content);
   if (u.assistantTurns === 0) return null;
-  const price = (model && MODEL_PRICES[model]) || DEFAULT_PRICE;
+  // Prefer the concrete id from the transcript; fall back to resolving the
+  // config alias (opus/sonnet/haiku) so Sonnet/Haiku aren't priced as Opus.
+  const modelId = u.model ?? resolveClaudeModelId(model);
+  const price = (modelId && MODEL_PRICES[modelId]) || DEFAULT_PRICE;
   const cost = (u.inputTokens / 1_000_000) * price.in + (u.outputTokens / 1_000_000) * price.out;
   return { cost, turns: u.assistantTurns };
 }
@@ -427,9 +449,12 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
       }
       // Turn-level deadline: a pty that hangs while still alive (no Stop hook, no
       // exit) would otherwise never resolve. Force-settle and release the pty so the
-      // session can't zombie as status:"running".
-      if (Date.now() - turnStartedAt > this.turnTimeoutMs) {
-        logger.warn(`InteractiveClaudeEngine: turn for ${jinnSessionId} exceeded ${Math.round(this.turnTimeoutMs / 1000)}s — force-settling as timed out`);
+      // session can't zombie as status:"running". Skipped while the engine is
+      // demonstrably still working (API requests streaming through the SSE proxy) —
+      // the deadline exists to catch WEDGED turns, not to cap long legitimate
+      // autonomous runs; a truly hung pty goes quiet and gets reaped on a later tick.
+      if (Date.now() - turnStartedAt > this.turnTimeoutMs && !this.isEngineBusy(jinnSessionId)) {
+        logger.warn(`InteractiveClaudeEngine: turn for ${jinnSessionId} exceeded ${Math.round(this.turnTimeoutMs / 1000)}s with no engine activity — force-settling as timed out`);
         resolver.interrupt("Interrupted: interactive turn timed out");
         this.lifecycle.releaseSession(jinnSessionId);
       }
@@ -813,6 +838,30 @@ export class InteractiveClaudeEngine implements InterruptibleEngine, PtyViewEngi
   /** True only while a turn is in flight (distinct from "PTY is warm"). */
   isTurnRunning(sessionId: string): boolean {
     return this.active.has(sessionId);
+  }
+
+  /** Grace bridging local tool executions between API calls: the PTY counts as
+   *  busy this long after the last upstream activity even with nothing in flight. */
+  private static readonly BUSY_ACTIVITY_WINDOW_MS = 5 * 60 * 1000;
+
+  /** True while the warm PTY's claude is demonstrably working OUTSIDE a managed
+   *  turn (autonomous background continuation): an API request is streaming
+   *  through its SSE proxy, or did so within the activity window. Wired into
+   *  PtyLifecycleManager.isBusy so the keep-warm reaper / LRU eviction never
+   *  kills a PTY mid-work. */
+  isEngineBusy(sessionId: string): boolean {
+    const handle = this.lifecycle.getWarm(sessionId);
+    if (!handle) return false;
+    const proxy = (handle as any)._proxy as SsePtyProxy | undefined;
+    return proxy?.isBusy(InteractiveClaudeEngine.BUSY_ACTIVITY_WINDOW_MS) ?? false;
+  }
+
+  /** Out-of-turn engine activity observed via an orphan hook (a background
+   *  continuation firing PreToolUse/PostToolUse/Stop after its turn settled).
+   *  Restarts the PTY keep-warm grace window so active background work — which
+   *  the lifecycle can't see as a turn — isn't reaped mid-flight. */
+  noteBackgroundActivity(sessionId: string): void {
+    this.lifecycle.touch(sessionId);
   }
 
   /** True iff a warm PTY exists for this session (in the lifecycle manager). */
