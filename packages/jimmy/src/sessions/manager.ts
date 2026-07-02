@@ -614,8 +614,14 @@ export class SessionManager {
           logger.warn(
             `Session ${session.id} hit a transient server error — retry ${i + 1}/${delays.length} in ${Math.round(delayMs / 1000)}s`,
           );
-          updateSession(session.id, { status: "running", lastActivity: new Date().toISOString() });
-          await new Promise((r) => setTimeout(r, delayMs));
+          // Chunked wait with a heartbeat: the status reconciler treats a
+          // "running" session with a stale lastActivity and no live engine turn
+          // as stuck — which is exactly what this backoff window looks like.
+          // Refreshing lastActivity every 20s keeps it out of the sweep.
+          for (let waited = 0; waited < delayMs; waited += 20_000) {
+            updateSession(session.id, { status: "running", lastActivity: new Date().toISOString() });
+            await new Promise((r) => setTimeout(r, Math.min(20_000, delayMs - waited)));
+          }
           const resumeId = result.sessionId?.trim() || session.engineSessionId || undefined;
           result = await engine.run({
             prompt:

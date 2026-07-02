@@ -190,6 +190,12 @@ export class SsePtyProxy {
     return this.lastUpstreamActivityAt > 0 && Date.now() - this.lastUpstreamActivityAt < recentMs;
   }
 
+  /** Strictly in-flight (no recency window): an upstream request is streaming
+   *  through this proxy right now. */
+  hasInflight(): boolean {
+    return this.inflightCount > 0;
+  }
+
   private handle(req: http.IncomingMessage, res: http.ServerResponse): void {
     const chunks: Buffer[] = [];
     // Holder (not a plain `let`) so the req-close handler always destroys the
