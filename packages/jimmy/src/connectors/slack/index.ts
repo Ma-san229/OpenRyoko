@@ -14,6 +14,7 @@ import { formatResponse, downloadAttachment } from "./format.js";
 import { normalizeSpeakerInfo, type SpeakerInfo } from "./speaker.js";
 import { runTriage } from "./triage.js";
 import { isShortAckCandidate } from "./triage-prompt.js";
+import { isOperatorSpeaker } from "../../shared/operator-match.js";
 import { ConversationTracker } from "./conversation-tracker.js";
 import { AgentsCanvasUpdater } from "./agents-canvas.js";
 import { extractGoalCondition, shouldExtractGoal } from "./goal-extractor.js";
@@ -27,6 +28,8 @@ export interface SlackConnectorContext {
   portalName?: string;
   /** Configured operator name — used to identify operator vs third party */
   operatorName?: string;
+  /** Additional operator names/handles (portal.operatorAliases) — see operator-match.ts. */
+  operatorAliases?: string[];
   /** Whether this connector's routed sessions can consume Claude-only /goal prompts. */
   goalInjectionEnabled?: boolean;
 }
@@ -48,6 +51,7 @@ export class SlackConnector implements Connector {
   private readonly goalExtractionConfig: SlackGoalExtractionConfig | undefined;
   private readonly portalName: string | undefined;
   private readonly operatorName: string | undefined;
+  private readonly operatorAliases: string[] | undefined;
   private readonly goalInjectionEnabled: boolean;
   private readonly conversations: ConversationTracker;
   private readonly agentsCanvas: AgentsCanvasUpdater | null;
@@ -130,6 +134,7 @@ export class SlackConnector implements Connector {
     this.goalExtractionConfig = config.goalExtraction;
     this.portalName = context.portalName;
     this.operatorName = context.operatorName;
+    this.operatorAliases = context.operatorAliases;
     this.goalInjectionEnabled = context.goalInjectionEnabled === true;
     this.conversations = new ConversationTracker();
     this.agentsCanvas = config.agentsCanvas?.enabled
@@ -187,12 +192,14 @@ export class SlackConnector implements Connector {
     );
 
     const speakerName = ctx.speaker?.name ?? "unknown";
-    const speakerIsOperator = !!this.operatorName && !!ctx.speaker && [
-      ctx.speaker.name,
-      ctx.speaker.realName,
-      ctx.speaker.displayName,
-      ctx.speaker.handle,
-    ].filter((v): v is string => !!v).includes(this.operatorName);
+    // Shared normalized matcher — the old exact `includes(operatorName)` never
+    // matched a nickname operatorName against profile names, so triage saw the
+    // operator as a third party (see operator-match.ts).
+    const speakerIsOperator = !!ctx.speaker && isOperatorSpeaker(
+      [ctx.speaker.name, ctx.speaker.realName, ctx.speaker.displayName, ctx.speaker.handle],
+      this.operatorName,
+      this.operatorAliases,
+    );
 
     const channelDescription = ctx.channelName ? `#${ctx.channelName}` : event.channel;
 
