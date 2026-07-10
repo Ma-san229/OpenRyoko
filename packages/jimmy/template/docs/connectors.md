@@ -38,6 +38,36 @@ connectors:
     botToken: xoxb-...    # Bot user OAuth token
 ```
 
+### Response Gating (`respondTo`)
+
+By default the bot responds to every message it can see. `respondTo` adds a
+deterministic gate, evaluated before the LLM triage layer, so gated messages
+cost zero tokens and zero latency:
+
+```yaml
+connectors:
+  slack:
+    respondTo:
+      im: always            # 1:1 DMs — reply without a mention (default: always)
+      mpim: mention         # group DMs — reply only when @-mentioned (default: always)
+      channel: mention      # channels — reply only when @-mentioned (default: always)
+      engagedThreads: true  # keep replying inside threads the bot already
+                            # engaged, without a re-mention (default: true)
+```
+
+Modes per scope: `always` | `mention` | `never`.
+
+- `mention` drops messages that don't @-mention the bot. With
+  `engagedThreads: true`, once the bot has replied (or reacted) in a thread,
+  follow-ups in that thread flow without a re-mention — mention once, then
+  converse naturally.
+- `never` silences a scope entirely, including mentions.
+- Unset scopes default to `always`, so existing configs keep the legacy
+  respond-to-everything behavior.
+- `respondTo` composes with `triage`: the gate decides *may we respond at
+  all* (hard policy), triage decides *should we* (air-reading). Messages
+  dropped by the gate never reach triage.
+
 ### Thread Mapping
 
 Slack messages are mapped to sessions based on conversation context:

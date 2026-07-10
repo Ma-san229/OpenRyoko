@@ -144,6 +144,12 @@ interface Config {
       shareSessionInChannel?: boolean
       allowFrom?: string | string[]
       ignoreOldMessagesOnBoot?: boolean
+      respondTo?: {
+        im?: "always" | "mention" | "never"
+        mpim?: "always" | "mention" | "never"
+        channel?: "always" | "mention" | "never"
+        engagedThreads?: boolean
+      }
       triage?: {
         enabled?: boolean
         engine?: "claude" | "codex"
@@ -1390,6 +1396,43 @@ export default function SettingsPage() {
                     checked={config.connectors?.slack?.ignoreOldMessagesOnBoot ?? true}
                     onChange={(v) =>
                       updateConfig(["connectors", "slack", "ignoreOldMessagesOnBoot"], v)
+                    }
+                  />
+                </FieldRow>
+
+                <div
+                  className="text-[length:var(--text-caption1)] font-[var(--weight-semibold)] text-[var(--text-tertiary)] mt-[var(--space-3)] mb-[var(--space-2)]"
+                >
+                  応答ゲート（respondTo）
+                </div>
+                {(["im", "mpim", "channel"] as const).map((scope) => (
+                  <FieldRow
+                    key={scope}
+                    label={
+                      scope === "im" ? "DM（1対1）" : scope === "mpim" ? "グループDM" : "チャンネル"
+                    }
+                  >
+                    <SettingsSelect
+                      value={config.connectors?.slack?.respondTo?.[scope] ?? "always"}
+                      onChange={(v) =>
+                        updateConfig(
+                          ["connectors", "slack", "respondTo", scope],
+                          v as "always" | "mention" | "never",
+                        )
+                      }
+                      options={[
+                        { value: "always", label: "常に応答" },
+                        { value: "mention", label: "@メンション時のみ" },
+                        { value: "never", label: "応答しない" },
+                      ]}
+                    />
+                  </FieldRow>
+                ))}
+                <FieldRow label="参加済みスレッドは再メンション不要">
+                  <ToggleSwitch
+                    checked={config.connectors?.slack?.respondTo?.engagedThreads ?? true}
+                    onChange={(v) =>
+                      updateConfig(["connectors", "slack", "respondTo", "engagedThreads"], v)
                     }
                   />
                 </FieldRow>

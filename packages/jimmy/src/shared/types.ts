@@ -376,6 +376,30 @@ export interface SlackGoalExtractionConfig {
   timeoutMs?: number;
 }
 
+/** Response mode for one Slack conversation scope. */
+export type SlackRespondMode = "always" | "mention" | "never";
+
+/**
+ * Deterministic response gate, evaluated before the LLM triage layer.
+ * Absent (or "always" in every scope) preserves the legacy respond-to-everything
+ * behavior. "mention" scopes drop messages that don't @-mention the bot,
+ * except inside threads the bot has already engaged (see `engagedThreads`).
+ */
+export interface SlackRespondToConfig {
+  /** 1:1 DMs. Default: "always". */
+  im?: SlackRespondMode;
+  /** Group DMs (mpim). Default: "always". */
+  mpim?: SlackRespondMode;
+  /** Public and private channels. Default: "always". */
+  channel?: SlackRespondMode;
+  /**
+   * In "mention" scopes, keep replying inside threads the bot has already
+   * engaged (replied or reacted in) without requiring a re-mention on every
+   * message. Default: true.
+   */
+  engagedThreads?: boolean;
+}
+
 export interface SlackConnectorConfig {
   /** Unique instance identifier (e.g. "slack-support") */
   id?: string;
@@ -385,6 +409,8 @@ export interface SlackConnectorConfig {
   botToken: string;
   allowFrom?: string | string[];
   ignoreOldMessagesOnBoot?: boolean;
+  /** Deterministic per-scope response gate (DM / group DM / channel). */
+  respondTo?: SlackRespondToConfig;
   /** Air-reading triage: decide per-message whether to reply/react/stay silent */
   triage?: SlackTriageConfig;
   /** Natural-language autonomous goal detection. Off by default because it adds latency. */
