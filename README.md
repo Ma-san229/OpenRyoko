@@ -208,7 +208,7 @@ engines:
     interactive: false     # true で対話モード(PTY)起動 → 6/15改定後も通常サブスク枠で動く
   codex:
     bin: codex
-    model: gpt-5.5
+    model: gpt-5.6-sol     # GPT-5.6 3ティア: gpt-5.6-sol(上) / gpt-5.6-terra(中) / gpt-5.6-luna(小)
 
 connectors:
   slack:

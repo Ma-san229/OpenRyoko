@@ -243,7 +243,7 @@ engines:
     effortLevel: xhigh
   codex:
     bin: codex
-    model: gpt-5.5
+    model: gpt-5.6-sol
 connectors: {}
 portal: {}
 logging:

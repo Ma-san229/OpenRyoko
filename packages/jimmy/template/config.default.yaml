@@ -19,7 +19,9 @@ engines:
     # maxLivePtys: 8   # max simultaneously-live PTYs (LRU-evicted) when interactive
   codex:
     bin: codex
-    model: gpt-5.5
+    # GPT-5.6 の3ティア: gpt-5.6-sol(上) / gpt-5.6-terra(中) / gpt-5.6-luna(小)
+    # 注意: 裸の "gpt-5.6" エイリアスは ChatGPT アカウントの Codex では 400 になる。明示 ID を使うこと
+    model: gpt-5.6-sol
     effortLevel: high
 
 connectors:
@@ -32,7 +34,7 @@ connectors:
     # triage:
     #   enabled: true
     #   engine: codex        # claude | codex
-    #   model: gpt-5-nano    # 軽量モデル推奨
+    #   model: gpt-5-nano    # 軽量モデル推奨（gpt-5.6-luna / claude-haiku-4-5 も可）
     #   timeoutMs: 20000
     #   threadContextLimit: 10
     #

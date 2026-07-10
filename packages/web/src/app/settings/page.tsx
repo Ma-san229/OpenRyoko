@@ -10,6 +10,14 @@ import { THEMES } from "@/lib/themes"
 import type { ThemeId } from "@/lib/themes"
 import { api } from "@/lib/api"
 import { EmojiPicker } from "@/components/ui/emoji-picker"
+import {
+  CLAUDE_MODELS,
+  OPENAI_MODELS,
+  DEFAULT_CLAUDE_MODEL,
+  DEFAULT_CODEX_MODEL,
+  modelsForEngine,
+  withCurrentValue,
+} from "@/lib/model-catalog"
 
 // ---------------------------------------------------------------------------
 // Accent color presets
@@ -1198,15 +1206,11 @@ export default function SettingsPage() {
                 </FieldRow>
                 <FieldRow label="Model">
                   <SettingsSelect
-                    value={config.engines?.claude?.model ?? "opus"}
+                    value={config.engines?.claude?.model ?? DEFAULT_CLAUDE_MODEL}
                     onChange={(v) =>
                       updateConfig(["engines", "claude", "model"], v)
                     }
-                    options={[
-                      { value: "opus", label: "Opus (claude-opus-4-8)" },
-                      { value: "sonnet", label: "Sonnet (claude-sonnet-5)" },
-                      { value: "haiku", label: "Haiku (claude-haiku-4-5)" },
-                    ]}
+                    options={withCurrentValue(CLAUDE_MODELS, config.engines?.claude?.model)}
                   />
                 </FieldRow>
                 <FieldRow label="Effort Level">
@@ -1261,19 +1265,11 @@ export default function SettingsPage() {
                 </FieldRow>
                 <FieldRow label="Model">
                   <SettingsSelect
-                    value={config.engines?.codex?.model ?? "gpt-5.5"}
+                    value={config.engines?.codex?.model ?? DEFAULT_CODEX_MODEL}
                     onChange={(v) =>
                       updateConfig(["engines", "codex", "model"], v)
                     }
-                    options={[
-                      { value: "gpt-5.5", label: "GPT-5.5" },
-                      { value: "gpt-5.4", label: "GPT-5.4" },
-                      { value: "gpt-5.3-codex", label: "GPT-5.3 Codex" },
-                      { value: "gpt-5.2-codex", label: "GPT-5.2 Codex" },
-                      { value: "gpt-5.2", label: "GPT-5.2" },
-                      { value: "gpt-5.1-codex-max", label: "GPT-5.1 Codex Max" },
-                      { value: "gpt-5.1-codex-mini", label: "GPT-5.1 Codex Mini" },
-                    ]}
+                    options={withCurrentValue(OPENAI_MODELS, config.engines?.codex?.model)}
                   />
                 </FieldRow>
                 <FieldRow label="Effort Level">
@@ -1472,15 +1468,21 @@ export default function SettingsPage() {
                   />
                 </FieldRow>
                 <FieldRow label="Model">
-                  <SettingsInput
+                  <SettingsSelect
                     value={config.connectors?.slack?.triage?.model ?? ""}
                     onChange={(v) =>
                       updateConfig(
                         ["connectors", "slack", "triage", "model"],
-                        v.trim() || undefined,
+                        v || undefined,
                       )
                     }
-                    placeholder="gpt-5-nano"
+                    options={[
+                      { value: "", label: "自動（エンジン既定）" },
+                      ...withCurrentValue(
+                        modelsForEngine(config.connectors?.slack?.triage?.engine ?? "codex"),
+                        config.connectors?.slack?.triage?.model,
+                      ),
+                    ]}
                   />
                 </FieldRow>
                 <FieldRow label="タイムアウト (ms)">
@@ -1577,15 +1579,21 @@ export default function SettingsPage() {
                   />
                 </FieldRow>
                 <FieldRow label="Model">
-                  <SettingsInput
+                  <SettingsSelect
                     value={config.connectors?.slack?.goalExtraction?.model ?? ""}
                     onChange={(v) =>
                       updateConfig(
                         ["connectors", "slack", "goalExtraction", "model"],
-                        v.trim() || undefined,
+                        v || undefined,
                       )
                     }
-                    placeholder="gpt-5-nano"
+                    options={[
+                      { value: "", label: "自動（エンジン既定）" },
+                      ...withCurrentValue(
+                        modelsForEngine(config.connectors?.slack?.goalExtraction?.engine ?? "codex"),
+                        config.connectors?.slack?.goalExtraction?.model,
+                      ),
+                    ]}
                   />
                 </FieldRow>
                 <FieldRow label="タイムアウト (ms)">
