@@ -1,4 +1,4 @@
-# Migration: 2026.7.6 (GPT-5.6 対応 / Codex 既定モデル gpt-5.6 / モデル選択 UI 刷新)
+# Migration: 2026.7.10 (GPT-5.6 対応 / Codex 既定モデル gpt-5.6 / モデル選択 UI 刷新)
 
 ## Summary
 
@@ -50,7 +50,7 @@ OpenAI **GPT-5.6**（Sol / Terra / Luna の3ティア）に対応する。3 点�
 
 ### 1. Config（自動）
 
-`ryoko update` / `ryoko migrate --auto` が config-patch を自動適用し、`jinn.version` を `"2026.7.6"` に更新する。手動操作は不要。
+`ryoko update` / `ryoko migrate --auto` が config-patch を自動適用し、`jinn.version` を `"2026.7.10"` に更新する。手動操作は不要。
 
 ### 2. Gateway 再起動
 
@@ -60,6 +60,6 @@ OpenAI **GPT-5.6**（Sol / Terra / Luna の3ティア）に対応する。3 点�
 
 なし。config-patch はカスタム値を保護する。既定が `gpt-5.6-sol` になるのは旧デフォルト（`gpt-5.5`）のままだったユーザーのみ。
 
-## Also in 2026.7.6
+## Also in 2026.7.10
 
 - **`connectors.slack.respondTo`（決定的メンションゲート）**: DM / グループDM / チャンネルごとに `always | mention | never` を指定できる応答ポリシー。LLM トリアージの前段で決定的に評価され、`engagedThreads: true`（既定）で bot 参加済みスレッドは再メンション不要。未設定なら従来どおり全メッセージに応答（後方互換・config-patch 不要のオプトイン機能）。詳細は `docs/connectors.md` を参照。
