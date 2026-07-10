@@ -208,12 +208,18 @@ engines:
     interactive: false     # true で対話モード(PTY)起動 → 6/15改定後も通常サブスク枠で動く
   codex:
     bin: codex
-    model: gpt-5.5
+    model: gpt-5.6-sol     # GPT-5.6 3ティア: gpt-5.6-sol(上) / gpt-5.6-terra(中) / gpt-5.6-luna(小)
 
 connectors:
   slack:
     app_token: xapp-...
     bot_token: xoxb-...
+    # 決定的な応答ゲート（トリアージの前段で評価。省略時は全メッセージに応答）
+    respondTo:
+      im: always            # DM: メンション不要で常に応答
+      mpim: mention         # グループDM: @メンション時のみ
+      channel: mention      # チャンネル: @メンション時のみ
+      engagedThreads: true  # botが参加済みのスレッド内は再メンション不要（デフォルト true）
     # 空気読みトリアージ（メンションなしメッセージへの過剰反応を抑制）
     triage:
       enabled: true

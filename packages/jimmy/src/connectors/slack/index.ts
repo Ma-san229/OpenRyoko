@@ -6,6 +6,7 @@ import type {
   IncomingMessage,
   ReplyContext,
   SlackConnectorConfig,
+  SlackRespondToConfig,
   Target,
   SlackGoalExtractionConfig,
 } from "../../shared/types.js";
@@ -14,6 +15,11 @@ import { formatResponse, downloadAttachment } from "./format.js";
 import { normalizeSpeakerInfo, type SpeakerInfo } from "./speaker.js";
 import { runTriage } from "./triage.js";
 import { isShortAckCandidate } from "./triage-prompt.js";
+import {
+  evaluateRespondPolicy,
+  hasMentionScope,
+  respondPolicyNeedsTracking,
+} from "./respond-policy.js";
 import { isOperatorSpeaker } from "../../shared/operator-match.js";
 import { ConversationTracker } from "./conversation-tracker.js";
 import { AgentsCanvasUpdater } from "./agents-canvas.js";
@@ -48,6 +54,7 @@ export class SlackConnector implements Connector {
   private botUserId: string | null = null;
   private typingIntervals = new Map<string, ReturnType<typeof setInterval>>();
   private readonly triageConfig: SlackTriageConfig | undefined;
+  private readonly respondTo: SlackRespondToConfig | undefined;
   private readonly goalExtractionConfig: SlackGoalExtractionConfig | undefined;
   private readonly portalName: string | undefined;
   private readonly operatorName: string | undefined;
@@ -131,6 +138,7 @@ export class SlackConnector implements Connector {
         : [];
     this.allowedUsers = allowFrom.length > 0 ? new Set(allowFrom) : null;
     this.triageConfig = config.triage;
+    this.respondTo = config.respondTo;
     this.goalExtractionConfig = config.goalExtraction;
     this.portalName = context.portalName;
     this.operatorName = context.operatorName;
@@ -140,6 +148,16 @@ export class SlackConnector implements Connector {
     this.agentsCanvas = config.agentsCanvas?.enabled
       ? new AgentsCanvasUpdater(this.app, config.agentsCanvas)
       : null;
+  }
+
+  /**
+   * Conversation tracking feeds two consumers: triage DM-equivalence and the
+   * respondTo engaged-thread exception. When neither is active, tracking is
+   * skipped entirely — engaged entries can't be evicted, so tracking in the
+   * default configuration would just leak memory.
+   */
+  private conversationTrackingEnabled(): boolean {
+    return this.triageConfig?.enabled === true || respondPolicyNeedsTracking(this.respondTo);
   }
 
   private async resolveSpeakerInfo(userId: string | undefined): Promise<SpeakerInfo | null> {
@@ -330,12 +348,69 @@ export class SlackConnector implements Connector {
         return;
       }
 
+      const slackUserId = (event as any).user as string;
+      const rawText = ((event as any).text || "") as string;
+      const channelType = ((event as any).channel_type as string) || "channel";
+      const threadTs = (event as any).thread_ts as string | undefined;
+      const wasMentioned = !!this.botUserId && rawText.includes(`<@${this.botUserId}>`);
+
+      const triageEnabled = this.triageConfig?.enabled === true;
+      const conversationKey = {
+        channel: (event as any).channel as string,
+        threadTs,
+        ts: (event as any).ts as string | undefined,
+        userId: slackUserId,
+      };
+      // Record the human speaker even for messages the gates below drop:
+      // a third human joining a thread must invalidate DM-equivalence
+      // whether or not we end up responding to their message.
+      if (this.conversationTrackingEnabled()) {
+        this.conversations.recordHumanMessage(conversationKey);
+      }
+
+      // Deterministic respondTo gate — evaluated before any network fetches
+      // and before LLM triage, so gated scopes cost nothing for dropped
+      // messages. "mention" scopes drop un-mentioned messages outright,
+      // except inside threads the bot has already engaged.
+      const respondDecision = evaluateRespondPolicy({
+        config: this.respondTo,
+        channelType,
+        wasMentioned,
+        isEngagedThread:
+          !!threadTs &&
+          this.conversations.isBotEngagedThread((event as any).channel, threadTs),
+      });
+      if (!respondDecision.allow) {
+        logger.info(
+          `[slack] respondTo gate → silent (${respondDecision.reason}) for ts=${(event as any).ts}`,
+        );
+        return;
+      }
+
+      // Early silent for cross-bot / cross-user traffic in shared channels.
+      // If the message @-mentions specific user(s), none of whom are us, and
+      // it isn't a DM, stay silent — regardless of whether the thread was
+      // previously marked "active" by an earlier reply. The activeThread
+      // TTL exists for mid-conversation follow-ups, not for sibling mentions
+      // directed at another bot or human in the same channel.
+      if (!wasMentioned && this.botUserId && channelType !== "im") {
+        const mentionedUsers = Array.from(
+          rawText.matchAll(/<@([UW][A-Z0-9]+)>/g),
+          (m) => m[1],
+        );
+        if (mentionedUsers.length > 0 && !mentionedUsers.includes(this.botUserId)) {
+          logger.info(
+            `[slack] message @-mentions ${mentionedUsers.join(",")} (not us) — staying silent for ts=${(event as any).ts}`,
+          );
+          return;
+        }
+      }
+
       const sessionKey = deriveSessionKey(event as any);
       const replyContext = buildReplyContext(event as any);
 
       // Fetch parent message for thread replies so the session has full context
       let parentContext = "";
-      const threadTs = (event as any).thread_ts;
       if (threadTs && threadTs !== (event as any).ts) {
         try {
           const parentResult = await this.app.client.conversations.replies({
@@ -375,37 +450,14 @@ export class SlackConnector implements Connector {
         }
       }
 
-      const slackUserId = (event as any).user as string;
       const [channelInfo, speaker] = await Promise.all([
         this.resolveChannelInfo((event as any).channel),
         this.resolveSpeakerInfo(slackUserId),
       ]);
       const channelName = channelInfo.name;
 
-      const channelType = ((event as any).channel_type as string) || "channel";
       // DM is never "external"; otherwise trust the Slack Connect flag.
       const channelExternal = channelType !== "im" && channelInfo.isExtShared;
-      const rawText = ((event as any).text || "") as string;
-      const wasMentioned = !!this.botUserId && rawText.includes(`<@${this.botUserId}>`);
-
-      // Early silent for cross-bot / cross-user traffic in shared channels.
-      // If the message @-mentions specific user(s), none of whom are us, and
-      // it isn't a DM, stay silent — regardless of whether the thread was
-      // previously marked "active" by an earlier reply. The activeThread
-      // TTL exists for mid-conversation follow-ups, not for sibling mentions
-      // directed at another bot or human in the same channel.
-      if (!wasMentioned && this.botUserId && channelType !== "im") {
-        const mentionedUsers = Array.from(
-          rawText.matchAll(/<@([UW][A-Z0-9]+)>/g),
-          (m) => m[1],
-        );
-        if (mentionedUsers.length > 0 && !mentionedUsers.includes(this.botUserId)) {
-          logger.info(
-            `[slack] message @-mentions ${mentionedUsers.join(",")} (not us) — staying silent for ts=${(event as any).ts}`,
-          );
-          return;
-        }
-      }
 
       // Slash commands (/new, /status, …) are control directives the session
       // manager parses by exact string match. Wrapping them in the
@@ -444,20 +496,6 @@ export class SlackConnector implements Connector {
       //   - DM-equivalent conversation: bot has engaged AND only this user has
       //     spoken in the conversation (thread or channel-user scope). Permanent
       //     until a third human joins.
-      const triageEnabled = this.triageConfig?.enabled === true;
-      const conversationKey = {
-        channel: (event as any).channel as string,
-        threadTs: (event as any).thread_ts as string | undefined,
-        ts: (event as any).ts as string | undefined,
-        userId: slackUserId,
-      };
-      // Skip conversation tracking entirely when triage is disabled — it
-      // serves no purpose (skipTriage is unconditionally true) and engaged
-      // entries can't be evicted, so doing it would leak memory in the
-      // default no-triage configuration.
-      if (triageEnabled) {
-        this.conversations.recordHumanMessage(conversationKey);
-      }
       const isDmEquivalent =
         triageEnabled && channelType !== "im" && !wasMentioned
           ? this.conversations.isDmEquivalent(conversationKey)
@@ -522,7 +560,7 @@ export class SlackConnector implements Connector {
         logger.info(`[slack] triage → reply (${decision.reason ?? "no reason"}) for ts=${(event as any).ts}`);
       }
 
-      if (triageEnabled) {
+      if (this.conversationTrackingEnabled()) {
         this.conversations.recordBotEngaged(conversationKey);
       }
 
@@ -564,6 +602,15 @@ export class SlackConnector implements Connector {
       logger.info(`[slack] Bot user ID: ${this.botUserId}`);
     } catch (err) {
       logger.warn(`[slack] Failed to get bot user ID: ${err}`);
+    }
+    // Fail closed: without our own user ID, mention detection is impossible,
+    // so mention-gated scopes will drop everything (except engaged threads).
+    // That honors "never barge in un-mentioned" at the cost of missed
+    // mentions until the next successful start — surface it loudly.
+    if (!this.botUserId && hasMentionScope(this.respondTo)) {
+      logger.warn(
+        "[slack] respondTo mention gate is configured but the bot user ID could not be resolved — un-mentioned messages in mention scopes will be dropped",
+      );
     }
 
     this.app.event("reaction_added", async ({ event }) => {
@@ -771,8 +818,8 @@ export class SlackConnector implements Connector {
       lastTs = res.ts;
     }
     // A newly-posted root message will be the thread_ts for any follow-up replies,
-    // so mark its future thread as bot-engaged. Only relevant when triage is on.
-    if (lastTs && this.triageConfig?.enabled === true) {
+    // so mark its future thread as bot-engaged. Only relevant when tracking is on.
+    if (lastTs && this.conversationTrackingEnabled()) {
       this.conversations.recordBotInitiatedThread(target.channel, lastTs);
     }
     return lastTs;
@@ -793,9 +840,9 @@ export class SlackConnector implements Connector {
       lastTs = res.ts;
     }
     // Record the thread the bot just replied in. Subsequent user replies in
-    // this same thread will carry thread_ts === threadTs and bypass triage.
-    // Only relevant when triage is on.
-    if (threadTs && this.triageConfig?.enabled === true) {
+    // this same thread will carry thread_ts === threadTs and bypass triage
+    // and the respondTo mention gate. Only relevant when tracking is on.
+    if (threadTs && this.conversationTrackingEnabled()) {
       this.conversations.recordBotInitiatedThread(target.channel, threadTs);
     }
     return lastTs;
@@ -814,9 +861,9 @@ export class SlackConnector implements Connector {
     }
     // A reaction on a message also counts as engagement; mark the target's
     // thread anchor so follow-ups in that thread are treated as bot-engaged.
-    // Only relevant when triage is on.
+    // Only relevant when tracking is on.
     const anchor = target.thread || target.messageTs;
-    if (anchor && this.triageConfig?.enabled === true) {
+    if (anchor && this.conversationTrackingEnabled()) {
       this.conversations.recordBotInitiatedThread(target.channel, anchor);
     }
   }
