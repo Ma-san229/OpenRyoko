@@ -2,12 +2,30 @@
 
 > **バージョン体系について**: 2026.4.26 から日付ベース (`YYYY.M.D`) のCalVerに移行しました。npm semver の制約上、月・日の leading zero は付けません (例: 4月26日 → `2026.4.26`)。
 
-## [2026.7.4] - 2026-07-10
+## [2026.7.6] - 2026-07-10
 
 ### Features
 - **Slack 決定的メンションゲート（`connectors.slack.respondTo`）**: DM / グループDM / チャンネルごとに `always | mention | never` の応答ポリシーを指定可能に。LLM トリアージの**前段**で決定的に評価されるため、「チャンネルではメンション以外に絶対発言しない」を保証できる（トリアージは確率的で、DM-equivalent 高速パスは一度返信した相手にメンションなしで応答し続けるため、この保証を与えられなかった）。`engagedThreads: true`（既定）で bot が返信・リアクション済みのスレッド内は再メンション不要（メンション1回→以降は自然な会話）。未設定なら従来どおり全メッセージに応答（完全後方互換）。落とすメッセージのコストはゼロ（ネットワーク取得・LLM 呼び出しの前に判定）。botUserId 未解決時は fail-closed（勝手な発言をしない側に倒す）。設定 UI・README・template docs にも反映。顧客要望（チャンネル招待のたびに「メンション以外では発言しないで」と書き込む運用の解消）由来。
 - **GPT-5.6 対応（Sol / Terra / Luna 3ティア）**: Codex 既定モデルを `gpt-5.5` → `gpt-5.6-sol` に更新（config-patch 同梱、カスタム値は保護・冪等）。設定画面のモデル選択に 3 ティア（松竹梅: Sol 上 / Terra 中 / Luna 小）を追加。**注意: 裸の `gpt-5.6` エイリアスは ChatGPT アカウントの Codex では 400 エラーになるため、明示 ID（`gpt-5.6-sol` 等）に統一**（2026-07-10 実機検証: 明示 ID は 3 ティアとも ChatGPT アカウントで動作確認済み）。
 - **モデル選択 UI の刷新**: 空気読みトリアージ / Goal 判定のモデルをフリーテキスト入力からプルダウン選択に変更（エンジン連動で Anthropic / OpenAI 系を表示、「自動（エンジン既定）」も選択可、手入力済みの値は「（現在の設定）」として保持）。モデル一覧は `packages/web/src/lib/model-catalog.ts` に単一情報源として集約。
+
+## [2026.7.5] - 2026-07-02
+
+### Fixes（話者誤認 — 他人を operator と勘違いする問題）
+- **operator 照合の正規化**: `portal.operatorName`（例:「亮介」）と話者のプロフィール名（「泉水亮介」「Ryosuke Sensui」「rsensui」）の照合が**完全一致**だったため、operator 本人すら毎ターン「⚠ NOT the operator」と誤マークされ、警告が狼少年化 → 本物の第三者への警告も無視される状態だった。共通の照合関数（NFKC正規化+大小無視+2文字以上の部分一致）に差し替え、システムプロンプトの identity/セッション両ブロックと Slack トリアージの operator 判定を統一。`portal.operatorAliases: []` で明示エイリアスも指定可能に。
+- **メッセージ単位の話者アノテーション**: グループ会話ではエンジンへ渡す各メッセージの先頭に `[Speaker: ◯◯ — NOT the operator; …]` を付与。スレッドに複数人が参加しても・warm PTY 再利用でシステムプロンプトが古くても・長い会話履歴の惰性があっても、**毎ターン**誰が話しているかを明示。DM（1:1で自明）・cron・スラッシュコマンド（ネイティブコマンド検出を壊さない）は対象外。
+
+## [2026.7.4] - 2026-07-02
+
+### Features（upstream jinn 0.20〜0.23 から安定性4点セットを移植）
+- **StopFailure grace window（20秒）**: `server_error`/`invalid_request`/`unknown` 系の StopFailure を即失敗確定せず猶予保留。CLI が自力リトライして完走すれば後続の Stop が**成功で上書き**、ツールフック/SSE活動で猶予を再アーム、**サブエージェントのAPIリクエストが in-flight の間は失敗確定を延期**（サブエージェントのAPIエラーが親ターンを誤って失敗させる問題の根本修正）。`rate_limit`/`billing_error`/`authentication_failed`/`max_output_tokens` は従来どおり即確定。
+- **Lost-Stop recovery**: Stop フック自体が消失した場合（relay障害・gateway.json 差し替え等）、5分経過+60秒静穏+ツール/API非実行を条件に、**transcript から最終アシスタントメッセージを復元してターンを成功確定**。ターン終了後に結果テキストが空だった場合の transcript バックフィルも追加（「(no output)」返信の解消）。
+- **status-reconciler**: `status:"running"` のままスタックしたセッションを15秒ごとにスイープし、ハートビート45秒超過+実ターンなしを**2回連続**確認したら idle に自動復旧（完了イベント喪失の最終バックストップ）。transient retry の待機中は20秒ごとのハートビートで誤検知を防止。
+- **ネイティブコマンド処理**: `/compact`/`/clear`/`/model` 等（Stopフックを発火しない）は出力静穏ウィンドウで完了確定、`/usage`/`/limits` 等（Stop の last_assistant_message が**前ターンのテキスト**を載せてくる）は空で確定し、重複エコーの再投稿を防止。
+- その他: 思考ブロック（`<thinking>`等）が最終テキストに漏れた場合の除去、bracketed-paste 後の CR を 50ms→150ms（ペースト未消化で送信が落ちるレースの解消、upstream知見）。
+
+### Tests
+- jimmy: 562 tests pass（grace window の保留/上書き/再アーム/延期、transcript 復元ヘルパー、status-reconciler の2スイープ確定、ネイティブコマンド判定・空確定の回帰テストを追加）。
 
 ## [2026.7.3] - 2026-07-02
 

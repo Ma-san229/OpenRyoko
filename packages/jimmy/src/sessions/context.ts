@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Employee, JinnConfig } from "../shared/types.js";
 import { JINN_HOME, ORG_DIR, CRON_JOBS, DOCS_DIR } from "../shared/paths.js";
+import { isOperatorSpeaker } from "../shared/operator-match.js";
 import { scanOrg } from "../gateway/org.js";
 import { buildServiceRegistry } from "../gateway/services.js";
 
@@ -84,6 +85,16 @@ export function buildContext(opts: {
   const portalName = opts.portalName || opts.config?.portal?.portalName || "Ryoko";
   const operatorName = opts.operatorName || opts.config?.portal?.operatorName;
   const language = opts.language || opts.config?.portal?.language || "English";
+  // Single operator-identity decision for the whole prompt (identity block +
+  // session block must agree). Matches across ALL known speaker aliases with
+  // normalization — the old exact speakerName===operatorName comparison flagged
+  // the operator himself as "NOT the operator" (nickname vs profile name),
+  // teaching the model to ignore the warning entirely.
+  const speakerIsOperator = isOperatorSpeaker(
+    [opts.speakerName, opts.speakerRealName, opts.speakerDisplayName, opts.speakerHandle],
+    operatorName,
+    opts.config?.portal?.operatorAliases,
+  );
 
   // ── ESSENTIAL: Identity ─────────────────────────────────────
   if (opts.employee) {
@@ -103,7 +114,7 @@ export function buildContext(opts: {
     sections.push({
       tier: Tier.ESSENTIAL,
       marker: "# You are",
-      content: buildIdentity(portalName, operatorName, language, opts.speakerName),
+      content: buildIdentity(portalName, operatorName, language, opts.speakerName, speakerIsOperator),
       summary: `# You are ${portalName}\nYour working directory is \`~/.ryoko\` (${JINN_HOME}).`,
     });
   }
@@ -122,7 +133,7 @@ export function buildContext(opts: {
   sections.push({
     tier: Tier.ESSENTIAL,
     marker: "## Current session",
-    content: buildSessionContext({ ...opts, sessionId: opts.sessionId, operatorName }),
+    content: buildSessionContext({ ...opts, sessionId: opts.sessionId, operatorName, speakerIsOperator }),
     summary: "", // always included, no trimming
   });
 
@@ -361,10 +372,8 @@ function buildIdentity(
   operatorName?: string,
   language?: string,
   speakerName?: string,
+  speakerIsOperator = false,
 ): string {
-  const speakerIsOperator =
-    !!speakerName && !!operatorName && speakerName.trim() === operatorName.trim();
-
   const operatorLine = operatorName
     ? speakerIsOperator || !speakerName
       ? `\nYour operator (the person who runs this Jinn instance) is **${operatorName}**. Address them by name when appropriate.`
@@ -417,6 +426,7 @@ function buildSessionContext(opts: {
   speakerIsBot?: boolean;
   speakerTz?: string;
   operatorName?: string;
+  speakerIsOperator?: boolean;
 }): string {
   let ctx = `## Current session\n`;
   if (opts.sessionId) ctx += `- Session ID: ${opts.sessionId}\n`;
@@ -447,10 +457,7 @@ function buildSessionContext(opts: {
     if (opts.speakerTz) ctx += `  - Timezone: ${opts.speakerTz}\n`;
 
     const operator = opts.operatorName?.trim();
-    const speakerAliases = [opts.speakerName, opts.speakerRealName, opts.speakerDisplayName, opts.speakerHandle]
-      .filter((v): v is string => !!v)
-      .map((v) => v.trim());
-    const isOperator = operator ? speakerAliases.includes(operator) : false;
+    const isOperator = opts.speakerIsOperator === true;
     if (operator && !isOperator) {
       ctx += `  - ⚠ NOT the operator. Address this person as "${opts.speakerName}", not "${operator}".\n`;
     } else if (operator && isOperator) {

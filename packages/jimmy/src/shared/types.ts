@@ -483,6 +483,11 @@ export interface ConnectorInstance {
 export interface PortalConfig {
   portalName?: string;
   operatorName?: string;
+  /** Additional names/handles that identify the operator across chat platforms
+   *  (e.g. ["泉水亮介", "Ryosuke Sensui", "rsensui"]). Checked alongside
+   *  operatorName by the shared operator matcher — configure when the display
+   *  nickname alone can't be matched to the operator's platform profile. */
+  operatorAliases?: string[];
   language?: string;
   onboarded?: boolean;
 }

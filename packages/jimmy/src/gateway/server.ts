@@ -20,6 +20,7 @@ import { PtyLifecycleManager } from "../engines/pty-lifecycle.js";
 import type { PtyViewEngine } from "../engines/pty-view-engine.js";
 import { attachPtyWebSocket } from "./pty-ws.js";
 import { HookRegistry } from "./hook-registry.js";
+import { startStatusReconciler } from "./status-reconciler.js";
 import { writeGatewayInfo } from "./gateway-info.js";
 import { cleanupSessionSettings, seedTrust } from "../shared/claude-settings.js";
 import { GATEWAY_INFO_FILE, HOOK_RELAY_SCRIPT, CLAUDE_SETTINGS_DIR, JINN_HOME } from "../shared/paths.js";
@@ -316,6 +317,7 @@ export async function startGateway(
           {
             portalName: cfg.portal?.portalName,
             operatorName: cfg.portal?.operatorName,
+            operatorAliases: cfg.portal?.operatorAliases,
             goalInjectionEnabled: (cfg.connectors.slack.employee
               ? employeeRegistry.get(cfg.connectors.slack.employee)?.engine
               : cfg.engines.default) === "claude",
@@ -490,6 +492,7 @@ export async function startGateway(
             const slack = new SlackConnector(slackConfig, {
               portalName: config.portal?.portalName,
               operatorName: config.portal?.operatorName,
+              operatorAliases: config.portal?.operatorAliases,
               goalInjectionEnabled: (employee ? employeeRegistry.get(employee)?.engine : config.engines.default) === "claude",
             });
             slack.onMessage((msg) => {
@@ -625,6 +628,7 @@ export async function startGateway(
               const slack = new SlackConnector(slackConfig, {
                 portalName: freshConfig.portal?.portalName,
                 operatorName: freshConfig.portal?.operatorName,
+                operatorAliases: freshConfig.portal?.operatorAliases,
                 goalInjectionEnabled: (employee ? employeeRegistry.get(employee)?.engine : freshConfig.engines.default) === "claude",
               });
               slack.onMessage((msg) => {
@@ -851,6 +855,10 @@ export async function startGateway(
       }
     }
   };
+
+  // Backstop for lost completion events: unstick sessions stuck at
+  // status:"running" with no live turn (see status-reconciler.ts).
+  const stopStatusReconciler = startStatusReconciler({ engines, emit });
 
   // API context
   const apiContext: ApiContext = {
@@ -1229,6 +1237,7 @@ export async function startGateway(
     if (interactiveClaudeEngine) {
       interactiveClaudeEngine.killAll();
       claudeLifecycle?.dispose();
+      try { stopStatusReconciler(); } catch { /* best effort */ }
       try { hookRegistry?.dispose(); } catch { /* best effort */ }
       try { fs.rmSync(GATEWAY_INFO_FILE, { force: true }); } catch { /* best effort */ }
     } else {
