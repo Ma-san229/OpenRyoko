@@ -2,6 +2,13 @@
 
 > **バージョン体系について**: 2026.4.26 から日付ベース (`YYYY.M.D`) のCalVerに移行しました。npm semver の制約上、月・日の leading zero は付けません (例: 4月26日 → `2026.4.26`)。
 
+## [2026.7.26] - 2026-07-25
+
+> 2026.7.25 と同日の追加リリース（npm は同一 version の再 publish 不可のため番号を +1。2026.7.4 / 2026.7.5 が同日リリースだった前例に倣う）。
+
+### Fixes
+- **Claude→Codex フォールバック時のモデル引き継ぎバグ**: Claude の usage limit で Codex にフォールバックする際、Claude セッションのモデル ID（`sonnet` / `claude-opus-5` 等）をそのまま `codex exec --model` に渡して即 exit 1 になっていた。フォールバック実行は Codex 側の設定既定モデルを使い、セッション行の model はフォールバック中 null にクリア（`engineOverride.originalModel` に退避し、Claude 復帰時に復元）。復帰判定を純粋関数 `computeEngineOverrideRevert` に切り出し回帰テスト5件を追加。
+
 ## [2026.7.25] - 2026-07-25
 
 ### Features

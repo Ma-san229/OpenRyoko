@@ -17,6 +17,7 @@ import {
   getMessages,
   insertMessage,
   updateSession,
+  type UpdateSessionFields,
 } from "./registry.js";
 import { notifyParentSession, notifyRateLimited, notifyRateLimitResumed, notifyDiscordChannel } from "./callbacks.js";
 import { buildContext } from "./context.js";
@@ -55,10 +56,16 @@ export function startsWithSlashCommand(text: string): boolean {
   return SLASH_COMMANDS.some((cmd) => t === cmd || t.startsWith(`${cmd} `));
 }
 
-function maybeRevertEngineOverride(session: Session): Session {
+/**
+ * Pure part of the engine-override revert: decide whether a session whose
+ * engine was temporarily switched away (Claude rate-limit fallback) is due to
+ * revert, and which fields to restore. Returns null when no revert is due.
+ * Exported for tests; the DB write happens in {@link maybeRevertEngineOverride}.
+ */
+export function computeEngineOverrideRevert(session: Session, nowMs: number = Date.now()): UpdateSessionFields | null {
   const meta = (session.transportMeta || {}) as Record<string, unknown>;
   const override = meta["engineOverride"] as Record<string, unknown> | undefined;
-  if (!override) return session;
+  if (!override) return null;
 
   const originalEngine = typeof override.originalEngine === "string" ? override.originalEngine : null;
   const originalEngineSessionId = typeof override.originalEngineSessionId === "string"
@@ -66,11 +73,11 @@ function maybeRevertEngineOverride(session: Session): Session {
     : null;
   const syncSince = typeof override.syncSince === "string" ? override.syncSince : null;
   const untilIso = typeof override.until === "string" ? override.until : null;
-  if (!originalEngine || !untilIso) return session;
+  if (!originalEngine || !untilIso) return null;
 
   const until = new Date(untilIso);
-  if (Number.isNaN(until.getTime())) return session;
-  if (until.getTime() > Date.now()) return session;
+  if (Number.isNaN(until.getTime())) return null;
+  if (until.getTime() > nowMs) return null;
 
   const engineSessionsRaw = meta["engineSessions"];
   const engineSessions = (engineSessionsRaw && typeof engineSessionsRaw === "object" && !Array.isArray(engineSessionsRaw))
@@ -90,12 +97,24 @@ function maybeRevertEngineOverride(session: Session): Session {
     nextMeta["claudeSyncSince"] = syncSince;
   }
   delete (nextMeta as Record<string, unknown>)["engineOverride"];
-  return updateSession(session.id, {
+  return {
     engine: originalEngine,
     engineSessionId: restoredSessionId,
     transportMeta: nextMeta as any,
     lastError: null,
-  }) ?? session;
+    // Restore the pre-fallback model only when the override stashed one.
+    // Legacy overrides (written before model stashing) leave session.model
+    // untouched, matching the old behavior.
+    ...("originalModel" in override
+      ? { model: typeof override.originalModel === "string" ? override.originalModel : null }
+      : {}),
+  };
+}
+
+function maybeRevertEngineOverride(session: Session): Session {
+  const updates = computeEngineOverrideRevert(session);
+  if (!updates) return session;
+  return updateSession(session.id, updates) ?? session;
 }
 
 function mergeTransportMeta(
@@ -720,11 +739,22 @@ export class SessionManager {
               engineSessions.claude = session.engineSessionId;
             }
             nextMeta.engineSessions = engineSessions;
-            nextMeta.engineOverride = { originalEngine: "claude", originalEngineSessionId: session.engineSessionId, until: until.toISOString(), syncSince };
+            nextMeta.engineOverride = {
+              originalEngine: "claude",
+              originalEngineSessionId: session.engineSessionId,
+              // Stash the Claude-side model so the revert can restore it —
+              // model ids are engine-specific and must not survive onto Codex.
+              originalModel: session.model ?? null,
+              until: until.toISOString(),
+              syncSince,
+            };
 
             updateSession(session.id, {
               engine: fallbackName,
               // Keep Claude engine_session_id intact for later restore; Codex will return its own thread id.
+              // Clear the model: a Claude model id (e.g. "sonnet" / "claude-opus-5")
+              // on a Codex session makes every subsequent turn exit with a 400.
+              model: null,
               transportMeta: nextMeta as any,
               status: "running",
               lastActivity: new Date().toISOString(),
@@ -734,11 +764,14 @@ export class SessionManager {
             });
 
             const fallbackConfig = this.config.engines.codex;
+            // Never carry the Claude session's model id onto Codex — ids are
+            // engine-specific ("sonnet" / "claude-opus-5" → codex exec exits 1).
+            const fallbackModel = fallbackConfig.model;
             const fallbackEffort = resolveEffort(
               fallbackConfig,
               session,
               employee,
-              effortLevelsForModel(this.config, "codex", session.model ?? fallbackConfig.model),
+              effortLevelsForModel(this.config, "codex", fallbackModel),
             );
             const codexResume = typeof engineSessions.codex === "string" ? (engineSessions.codex as string) : undefined;
             const history = getMessages(session.id)
@@ -754,7 +787,7 @@ export class SessionManager {
               systemPrompt,
               cwd: JINN_HOME,
               bin: fallbackConfig.bin,
-              model: session.model ?? fallbackConfig.model,
+              model: fallbackModel,
               effortLevel: fallbackEffort,
               cliFlags: employee?.cliFlags,
               sshHost: employee?.sshHost,
