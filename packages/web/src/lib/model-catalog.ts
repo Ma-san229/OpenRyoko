@@ -5,8 +5,11 @@
 // rather than a hunt through hardcoded <select> blocks.
 //
 // Values are the exact ids passed to each engine's CLI:
-//   - Claude: the bare tier aliases (`opus`/`sonnet`/`haiku`) resolve to the
-//     latest model of that tier at run time.
+//   - Claude: Opus は明示 ID `claude-opus-5` を既定にする。裸の `opus`
+//     エイリアスは「インストール済み Claude CLI が知っている最新 Opus」に
+//     解決されるため、CLI が古いと旧世代（4.8 等）に留まる。明示 ID なら
+//     CLI バージョンに関係なく Opus 5 が使われる（ID は API パススルー）。
+//     `sonnet`/`haiku` の裸エイリアスは従来どおり最新ティアに解決。
 //   - OpenAI (Codex): GPT-5.6 ships three durable capability tiers —
 //     Sol (上 / flagship), Terra (中 / balanced), Luna (小 / fastest & cheapest).
 //     Always use the explicit tier ids (`gpt-5.6-sol` etc.): the bare
@@ -20,12 +23,14 @@ export interface ModelOption {
 }
 
 /** Default model id for each engine, mirrored by the backend synth defaults. */
-export const DEFAULT_CLAUDE_MODEL = "opus"
+export const DEFAULT_CLAUDE_MODEL = "claude-opus-5"
 export const DEFAULT_CODEX_MODEL = "gpt-5.6-sol"
 
-/** Anthropic tiers. Bare aliases resolve to the latest model of each tier. */
+/** Anthropic tiers. Opus は明示 ID（CLI 版数に依存しない）、他は裸エイリアス。 */
 export const CLAUDE_MODELS: ModelOption[] = [
-  { value: "opus", label: "Opus 4.8 — 上（最上位 / claude-opus-4-8）" },
+  { value: "claude-opus-5", label: "Opus 5 — 上（最上位 / 既定 / claude-opus-5）" },
+  { value: "claude-opus-4-8", label: "Opus 4.8 — 旧世代（ピン留め用 / claude-opus-4-8）" },
+  { value: "opus", label: "Opus — CLI が解決する最新 Opus に自動追従" },
   { value: "sonnet", label: "Sonnet 5 — 中（バランス / claude-sonnet-5）" },
   { value: "haiku", label: "Haiku 4.5 — 小（軽量・高速 / claude-haiku-4-5）" },
 ]

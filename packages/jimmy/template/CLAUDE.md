@@ -270,7 +270,7 @@ provides:                    # オプション — この従業員が組織に�
   "schedule": "0 9 * * 1-5",
   "timezone": "Asia/Tokyo",
   "engine": "claude",
-  "model": "opus",
+  "model": "claude-opus-5",
   "employee": "従業員名 or null",
   "prompt": "実行する指示",
   "delivery": {

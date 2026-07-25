@@ -9,11 +9,17 @@ import {
 } from "@/lib/model-catalog"
 
 describe("model-catalog", () => {
-  it("defaults Codex to GPT-5.6 (Sol) and Claude to opus", () => {
+  it("defaults Codex to GPT-5.6 (Sol) and Claude to Opus 5 (explicit id)", () => {
     expect(DEFAULT_CODEX_MODEL).toBe("gpt-5.6-sol")
-    expect(DEFAULT_CLAUDE_MODEL).toBe("opus")
+    expect(DEFAULT_CLAUDE_MODEL).toBe("claude-opus-5")
     expect(OPENAI_MODELS[0].value).toBe("gpt-5.6-sol")
+    expect(CLAUDE_MODELS[0].value).toBe("claude-opus-5")
     expect(CLAUDE_MODELS.some((m) => m.value === DEFAULT_CLAUDE_MODEL)).toBe(true)
+  })
+
+  it("keeps Opus 4.8 pin and the bare opus alias selectable", () => {
+    const ids = CLAUDE_MODELS.map((m) => m.value)
+    expect(ids).toEqual(expect.arrayContaining(["claude-opus-4-8", "opus"]))
   })
 
   it("exposes the GPT-5.6 松竹梅 tiers (Sol / Terra / Luna)", () => {

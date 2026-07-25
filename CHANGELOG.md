@@ -2,6 +2,12 @@
 
 > **バージョン体系について**: 2026.4.26 から日付ベース (`YYYY.M.D`) のCalVerに移行しました。npm semver の制約上、月・日の leading zero は付けません (例: 4月26日 → `2026.4.26`)。
 
+## [2026.7.25] - 2026-07-25
+
+### Features
+- **Claude Opus 5 対応（`claude-opus-5`）**: Claude 既定モデルを `opus`（裸エイリアス）→ `claude-opus-5`（明示 ID）に更新（config-patch 同梱、カスタム値は保護・冪等）。裸の `opus` エイリアスはインストール済み Claude CLI が知る最新 Opus 止まりで、CLI が古いと Opus 4.8 に留まるため、明示 ID に統一（Codex の `gpt-5.6-sol` 統一と同じ方針）。Opus 5 は Opus 4.8 と同額（$5/$25 per MTok）・1M コンテキスト・128K 出力・effort 全レベル（low〜max）対応。設定画面の Claude モデル選択肢に Opus 5（既定）/ Opus 4.8（ピン留め用）/ opus（CLI 自動追従）を追加。`claudeSupportsXhigh` は既存の `opus-5` パターンで対応済みのためコード変更なし。
+- **コスト価格表の修正**: Opus 5 の価格（$5/$25）を追加し、Opus 4.8/4.7/4.6 の誤った旧値（$15/$75 = Opus 4.1 世代の価格）を公式価格 $5/$25 に修正。
+
 ## [2026.7.10] - 2026-07-10
 
 ### Features
