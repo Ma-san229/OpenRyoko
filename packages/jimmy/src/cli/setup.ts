@@ -239,7 +239,7 @@ engines:
   default: claude
   claude:
     bin: claude
-    model: opus
+    model: claude-opus-5
     effortLevel: xhigh
   codex:
     bin: codex

@@ -27,7 +27,7 @@ const EFFORT_MECHANISM: Record<EngineName, EffortMechanism> = {
 
 /** Conservative per-engine defaults used when synthesizing (no `models:` block). */
 const SYNTH_DEFAULTS: Record<EngineName, { supportsEffort: boolean; effortLevels: string[]; fallbackModel: string }> = {
-  claude: { supportsEffort: true, effortLevels: ["low", "medium", "high", "xhigh"], fallbackModel: "opus" },
+  claude: { supportsEffort: true, effortLevels: ["low", "medium", "high", "xhigh"], fallbackModel: "claude-opus-5" },
   codex: { supportsEffort: true, effortLevels: ["low", "medium", "high", "xhigh"], fallbackModel: "gpt-5.6-sol" },
   gemini: { supportsEffort: false, effortLevels: [], fallbackModel: "gemini-2.5-pro" },
 };
