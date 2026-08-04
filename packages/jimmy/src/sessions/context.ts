@@ -137,6 +137,14 @@ export function buildContext(opts: {
     summary: "", // always included, no trimming
   });
 
+  // ── ESSENTIAL: Process lifetime (background tasks die at turn end) ──
+  sections.push({
+    tier: Tier.ESSENTIAL,
+    marker: "## Process lifetime",
+    content: buildProcessLifetimeContext(),
+    summary: "## Process lifetime\nBackground tasks are killed when your turn ends. Detach long jobs with `setsid nohup <cmd> > <logfile> 2>&1 &` and verify via the logfile in a later turn.",
+  });
+
   // ── ESSENTIAL: Configuration awareness ──────────────────────
   if (opts.config) {
     sections.push({
@@ -642,6 +650,20 @@ function buildKnowledgeContext(): string | null {
   }
 
   return lines.join("\n");
+}
+
+function buildProcessLifetimeContext(): string {
+  return [
+    `## Process lifetime (background tasks die when your turn ends)`,
+    `Your process is one-shot: it is spawned for this turn and exits as soon as you deliver your final answer. Anything you started in the background (\`&\`, run_in_background Bash tasks) lives in the SAME process group and is killed with it — silently, with no error and no notification.`,
+    ``,
+    `- NEVER start a background job and reply "I'll report back when it's done" — the job dies the moment your turn ends, and nobody is told. This is different from an interactive CLI, where the CLI outlives the turn.`,
+    `- If a job fits within this turn, run it in the FOREGROUND and wait for it to finish before answering.`,
+    `- If a job must outlive the turn, fully detach it from your process group and capture its output:`,
+    `  \`setsid nohup <cmd> > /tmp/<job>.log 2>&1 &\``,
+    `  Then tell the user it is running detached, and in a LATER turn verify by reading the logfile and checking the expected artifact (uploaded file, build output, etc.).`,
+    `- Never report a detached job as done without verifying the artifact. If the logfile is missing or incomplete, say so.`,
+  ].join("\n");
 }
 
 function buildConnectorContext(connectors: string[], gatewayUrl: string, portalName: string): string {
