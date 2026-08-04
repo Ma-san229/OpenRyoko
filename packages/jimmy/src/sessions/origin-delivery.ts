@@ -18,8 +18,12 @@ import { logger } from "../shared/logger.js";
 export type OriginDeliveryResult =
   /** A public action reached the connector. */
   | "delivered"
-  /** Nothing to deliver: web session, no reply target, or disposition "none". */
-  | "skipped"
+  /** Intentionally nothing to post: empty text or disposition "none". */
+  | "suppressed"
+  /** No addressable origin: web session, unknown connector, or a reply
+   *  context without a target. Callers that EXPECT a connector-origin
+   *  session must surface this — the conversation cannot be reached. */
+  | "no_target"
   /** The connector call failed after retries — the caller MUST surface this. */
   | "failed";
 
@@ -31,14 +35,14 @@ export async function deliverToOriginConnector(
   connectors: Map<string, Connector>,
   retryDelaysMs: number[] = RETRY_DELAYS_MS,
 ): Promise<OriginDeliveryResult> {
-  if (!text.trim()) return "skipped";
+  if (!text.trim()) return "suppressed";
   const connector = session.connector ? connectors.get(session.connector) : undefined;
-  if (!connector || !session.replyContext) return "skipped";
+  if (!connector || !session.replyContext) return "no_target";
 
   const target = connector.reconstructTarget(session.replyContext);
   // Web sessions store a synthetic replyContext that reconstructs to an empty
   // target — nothing addressable to post to.
-  if (!target.channel) return "skipped";
+  if (!target.channel) return "no_target";
 
   const meta = (session.transportMeta ?? {}) as Record<string, unknown>;
   const isDM = meta.channelType === "im";
@@ -50,7 +54,7 @@ export async function deliverToOriginConnector(
     canReact: connector.getCapabilities().reactions,
   };
   const { publicAction } = normalizeDelivery(text, ctx);
-  if (publicAction.kind === "none") return "skipped";
+  if (publicAction.kind === "none") return "suppressed";
 
   let lastErr: unknown;
   for (let attempt = 0; attempt <= retryDelaysMs.length; attempt++) {

@@ -12,15 +12,27 @@ import type { JobState } from "./state.js";
 
 const LOG_TAIL_LINES = 40;
 const LOG_TAIL_MAX_CHARS = 4000;
+const LOG_TAIL_READ_BYTES = 64 * 1024;
 
+/** Read only the last chunk of the file — a multi-GB job log must not be
+ *  slurped into the monitor's memory. */
 export function readLogTail(logFile: string, maxLines: number = LOG_TAIL_LINES): string {
+  let fd: number | undefined;
   try {
-    const raw = fs.readFileSync(logFile, "utf8");
-    const lines = raw.split("\n");
+    const size = fs.statSync(logFile).size;
+    const start = Math.max(0, size - LOG_TAIL_READ_BYTES);
+    const buf = Buffer.alloc(size - start);
+    fd = fs.openSync(logFile, "r");
+    fs.readSync(fd, buf, 0, buf.length, start);
+    const lines = buf.toString("utf8").split("\n");
     const tail = lines.slice(-maxLines).join("\n").trimEnd();
     return tail.length > LOG_TAIL_MAX_CHARS ? `…${tail.slice(-LOG_TAIL_MAX_CHARS)}` : tail;
   } catch {
     return "(log file missing or unreadable)";
+  } finally {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch { /* already closed */ }
+    }
   }
 }
 

@@ -53,6 +53,11 @@ export async function runJobMonitor(jobId: string, deps: MonitorDeps = {}): Prom
   if (!state) return null;
   // A monitor restart must never re-run the command or double-notify.
   if (state.status !== "running") return state;
+  // monitorPid !== 0 means a monitor already claimed this job and may have
+  // started the command. Even if that monitor is now dead, re-running here
+  // could execute the command twice (its detached child may still be alive).
+  // Leave it to orphan detection instead.
+  if (state.monitorPid !== 0 && state.monitorPid !== process.pid) return state;
   if (!claimJob(jobId, jobsDir)) return state;
 
   // The launcher wrote monitorPid 0; the claimed monitor records itself.

@@ -144,11 +144,16 @@ export function findJobsNeedingAttention(jobsDir: string = JOBS_DIR, nowMs: numb
 
 const PRUNE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 
-/** Remove terminal-state job files older than a week. Opportunistic cleanup. */
+/**
+ * Remove NOTIFIED job files older than a week. Opportunistic cleanup.
+ * notify_failed / exited / orphaned states are never auto-pruned — they are
+ * the "this job was never handled" evidence and must persist until the agent
+ * (or operator) deals with them and deletes the file.
+ */
 export function pruneOldJobs(jobsDir: string = JOBS_DIR, nowMs: number = Date.now()): number {
   let pruned = 0;
   for (const state of listJobStates(jobsDir)) {
-    if (state.status !== "notified" && state.status !== "notify_failed") continue;
+    if (state.status !== "notified") continue;
     const ts = new Date(state.finishedAt ?? state.startedAt).getTime();
     if (Number.isFinite(ts) && nowMs - ts > PRUNE_AFTER_MS) {
       try {

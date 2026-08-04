@@ -102,12 +102,13 @@ describe("job state files", () => {
     });
   });
 
-  it("prunes only terminal states older than a week", () => {
+  it("prunes only old NOTIFIED jobs — unhandled evidence (notify_failed etc.) persists", () => {
     const old = new Date(Date.now() - 8 * 24 * 3600_000).toISOString();
     writeJobState(makeState({ id: "old-done", status: "notified", finishedAt: old }), dir);
+    writeJobState(makeState({ id: "old-lost", status: "notify_failed", finishedAt: old }), dir);
     writeJobState(makeState({ id: "old-running", status: "running", startedAt: old }), dir);
     writeJobState(makeState({ id: "fresh", status: "notified", finishedAt: new Date().toISOString() }), dir);
     expect(pruneOldJobs(dir)).toBe(1);
-    expect(listJobStates(dir).map((s) => s.id).sort()).toEqual(["fresh", "old-running"]);
+    expect(listJobStates(dir).map((s) => s.id).sort()).toEqual(["fresh", "old-lost", "old-running"]);
   });
 });

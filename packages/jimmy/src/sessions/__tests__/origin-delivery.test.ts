@@ -75,29 +75,29 @@ describe("deliverToOriginConnector", () => {
     expect(posted).not.toContain("operator note");
   });
 
-  it("does nothing for a web session (no connector)", async () => {
+  it("reports no_target for a web session (no connector)", async () => {
     const { connector, replyMessage } = makeConnector();
     const session = makeSession({ connector: null, replyContext: { source: "web" } as never });
     const delivered = await deliverToOriginConnector(session, "answer", new Map([["slack", connector]]));
 
-    expect(delivered).toBe("skipped");
+    expect(delivered).toBe("no_target");
     expect(replyMessage).not.toHaveBeenCalled();
   });
 
-  it("does nothing when reply_context has no addressable channel", async () => {
+  it("reports no_target when reply_context has no addressable channel", async () => {
     const { connector, replyMessage } = makeConnector();
     const session = makeSession({ replyContext: { source: "web" } as never });
     const delivered = await deliverToOriginConnector(session, "answer", new Map([["slack", connector]]));
 
-    expect(delivered).toBe("skipped");
+    expect(delivered).toBe("no_target");
     expect(replyMessage).not.toHaveBeenCalled();
   });
 
-  it("does nothing for empty text", async () => {
+  it("suppresses empty text (intentional no-post, not an error)", async () => {
     const { connector, replyMessage } = makeConnector();
     const delivered = await deliverToOriginConnector(makeSession(), "   ", new Map([["slack", connector]]));
 
-    expect(delivered).toBe("skipped");
+    expect(delivered).toBe("suppressed");
     expect(replyMessage).not.toHaveBeenCalled();
   });
 

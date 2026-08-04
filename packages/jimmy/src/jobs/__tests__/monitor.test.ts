@@ -48,7 +48,8 @@ describe("runJobMonitor", () => {
       gatewayUrl,
       command: "echo hello-from-job",
       logFile: path.join(dir, "j1.log"),
-      monitorPid: process.pid,
+      // Mirror the launcher: pid 0 until the monitor claims the job.
+      monitorPid: 0,
       startedAt: new Date().toISOString(),
       status: "running",
       ...overrides,
@@ -134,6 +135,16 @@ describe("runJobMonitor", () => {
     }
     expect(survivors).toBe("");
   }, 20_000);
+
+  it("never re-runs a job a dead monitor already claimed (its child may still be alive)", async () => {
+    // A previous monitor claimed the job (monitorPid set, dead) and vanished.
+    seedJob({ command: "echo should-not-run >> " + path.join(dir, "reran.txt"), monitorPid: 2 ** 30 });
+    const result = await runJobMonitor("j1", { jobsDir: dir, retryDelaysMs: [10] });
+
+    expect(result?.status).toBe("running"); // untouched — orphan detection owns it
+    expect(fs.existsSync(path.join(dir, "reran.txt"))).toBe(false);
+    expect(received).toHaveLength(0);
+  });
 
   it("two concurrent monitors on the same job run the command and notify only once", async () => {
     seedJob({ command: "echo once >> " + path.join(dir, "ran.txt") });
