@@ -58,6 +58,24 @@ describe("SlackConnector.sendMessage — thread targeting (issue #6)", () => {
     expect(postMessage.mock.calls[0][0].thread_ts).toBeUndefined();
   });
 
+  it("trims a padded thread before sending it to Slack", async () => {
+    const { connector, postMessage } = makeConnector();
+    const target: Target = { channel: "C123", thread: " 111.222 " };
+
+    await connector.sendMessage(target, "reply text");
+
+    expect(postMessage.mock.calls[0][0].thread_ts).toBe("111.222");
+  });
+
+  it("ignores a non-string thread from an untrusted payload", async () => {
+    const { connector, postMessage } = makeConnector();
+    const target = { channel: "C123", thread: 123 } as unknown as Target;
+
+    await connector.sendMessage(target, "root text");
+
+    expect(postMessage.mock.calls[0][0].thread_ts).toBeUndefined();
+  });
+
   it("keeps replyMessage behavior unchanged (thread || messageTs)", async () => {
     const { connector, postMessage } = makeConnector();
     const target: Target = { channel: "C123", messageTs: "333.444" };

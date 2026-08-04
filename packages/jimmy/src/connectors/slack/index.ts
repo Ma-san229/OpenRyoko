@@ -21,6 +21,7 @@ import {
   respondPolicyNeedsTracking,
 } from "./respond-policy.js";
 import { isOperatorSpeaker } from "../../shared/operator-match.js";
+import { explicitThread } from "../../shared/threading.js";
 import { ConversationTracker } from "./conversation-tracker.js";
 import { AgentsCanvasUpdater } from "./agents-canvas.js";
 import { extractGoalCondition, shouldExtractGoal } from "./goal-extractor.js";
@@ -811,8 +812,9 @@ export class SlackConnector implements Connector {
     // reply" without thread_ts lands it bare in the channel. Callers that
     // reach sendMessage with a thread (proxy endpoint, MCP tool) get the
     // same behavior as replyMessage.
-    if (target.thread && target.thread.trim()) {
-      return this.replyMessage(target, text);
+    const thread = explicitThread(target.thread);
+    if (thread) {
+      return this.replyMessage({ ...target, thread }, text);
     }
     const chunks = formatResponse(text);
     let lastTs: string | undefined;
