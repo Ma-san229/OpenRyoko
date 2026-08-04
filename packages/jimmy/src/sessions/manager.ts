@@ -433,6 +433,15 @@ export class SessionManager {
         speakerSlackId: (meta.speakerSlackId as string) || undefined,
         speakerIsBot: (meta.speakerIsBot as boolean | null) ?? undefined,
         speakerTz: (meta.speakerTz as string) || undefined,
+        // Interactive PTY survives across turns; everything else (headless
+        // claude -p, codex, gemini, SSH fallback) is a one-shot process whose
+        // background tasks die at turn end (#38).
+        processLifetime:
+          session.engine === "claude" &&
+          this.config.engines.claude?.interactive === true &&
+          !employee?.sshHost
+            ? "persistent"
+            : "one-shot",
         hierarchy,
       });
 

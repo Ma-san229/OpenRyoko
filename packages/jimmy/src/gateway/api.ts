@@ -2275,6 +2275,14 @@ async function runWebSession(
       connectors: Array.from(context.connectors.keys()),
       config,
       sessionId: currentSession.id,
+      // Interactive PTY survives across turns; everything else is a one-shot
+      // process whose background tasks die at turn end (#38).
+      processLifetime:
+        currentSession.engine === "claude" &&
+        config.engines.claude?.interactive === true &&
+        !employee?.sshHost
+          ? "persistent"
+          : "one-shot",
       hierarchy: orgHierarchy,
     });
 

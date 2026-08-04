@@ -11,38 +11,57 @@ describe("buildContext — process lifetime section", () => {
     user: "U123",
   };
 
-  it("includes the process lifetime warning as an essential section", () => {
+  const stubConfig = {
+    jinn: { version: "0.0.0" },
+    gateway: { port: 7777, host: "127.0.0.1" },
+    engines: {
+      default: "claude",
+      claude: { bin: "claude", model: "" },
+      codex: { bin: "codex", model: "" },
+    },
+    connectors: {},
+    logging: { level: "info", stdout: false, file: "" },
+  };
+
+  it("warns about one-shot process death by default", () => {
     const ctx = buildContext(baseOpts);
     expect(ctx).toContain("## Process lifetime");
     expect(ctx).toContain("background tasks die when your turn ends");
+    expect(ctx).toContain("Your process is one-shot");
+  });
+
+  it("gives OS-specific detach commands (setsid is Linux-only)", () => {
+    const ctx = buildContext(baseOpts);
+    expect(ctx).toContain("setsid nohup");
+    expect(ctx).toMatch(/macOS/);
+    expect(ctx).toMatch(/disown/);
+  });
+
+  it("says the agent cannot be woken up and must verify before reporting done", () => {
+    const ctx = buildContext(baseOpts);
+    expect(ctx).toContain("You will NOT be notified");
+    expect(ctx).toMatch(/never claim completion you have not verified/i);
+  });
+
+  it("does not claim one-shot death for persistent (interactive PTY) sessions", () => {
+    const ctx = buildContext({ ...baseOpts, processLifetime: "persistent" });
+    expect(ctx).not.toContain("Your process is one-shot");
+    expect(ctx).toContain("## Process lifetime");
+    expect(ctx).toContain("persistent interactive process");
+    // Detach guidance still applies: the PTY dies with the session/gateway.
     expect(ctx).toContain("setsid nohup");
   });
 
-  it("tells the agent to verify detached jobs via logfile in a later turn", () => {
-    const ctx = buildContext(baseOpts);
-    expect(ctx).toMatch(/LATER turn/);
-    expect(ctx).toMatch(/logfile/i);
-  });
-
-  it("survives aggressive trimming (essential tier is never dropped)", () => {
-    const stubConfig = {
-      jinn: { version: "0.0.0" },
-      gateway: { port: 7777, host: "127.0.0.1" },
-      engines: {
-        default: "claude",
-        claude: { bin: "claude", model: "" },
-        codex: { bin: "codex", model: "" },
-      },
-      connectors: {},
-      logging: { level: "info", stdout: false, file: "" },
-      context: { maxChars: 4000 },
-    };
+  it("is essential tier: full content survives trimming that summarizes standard sections", () => {
     const ctx = buildContext({
       ...baseOpts,
-      config: stubConfig as never,
+      config: { ...stubConfig, context: { maxChars: 2000 } } as never,
       connectors: ["slack"],
     });
-    expect(ctx.length).toBeGreaterThan(0);
-    expect(ctx).toContain("## Process lifetime");
+    // A standard-tier section (connectors) collapsed to its summary…
+    expect(ctx).not.toContain("**Send message**");
+    // …while the full lifetime warning (this phrase is absent from any
+    // summary) must remain intact.
+    expect(ctx).toContain("NEVER start a plain background job");
   });
 });

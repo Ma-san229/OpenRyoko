@@ -71,6 +71,13 @@ export function buildContext(opts: {
   speakerIsBot?: boolean;
   /** Speaker's IANA timezone */
   speakerTz?: string;
+  /**
+   * How the engine process for this turn lives. "one-shot" (default): a fresh
+   * process is spawned per turn and exits — with its whole process group —
+   * when the final answer is delivered. "persistent": an interactive PTY that
+   * survives across turns (config.engines.claude.interactive, local only).
+   */
+  processLifetime?: "one-shot" | "persistent";
   hierarchy?: import("../shared/types.js").OrgHierarchy;
 }): string {
   const maxChars = opts.config?.context?.maxChars ?? DEFAULT_MAX_CONTEXT_CHARS;
@@ -137,12 +144,12 @@ export function buildContext(opts: {
     summary: "", // always included, no trimming
   });
 
-  // ── ESSENTIAL: Process lifetime (background tasks die at turn end) ──
+  // ── ESSENTIAL: Process lifetime (background tasks die with the process) ──
   sections.push({
     tier: Tier.ESSENTIAL,
     marker: "## Process lifetime",
-    content: buildProcessLifetimeContext(),
-    summary: "## Process lifetime\nBackground tasks are killed when your turn ends. Detach long jobs with `setsid nohup <cmd> > <logfile> 2>&1 &` and verify via the logfile in a later turn.",
+    content: buildProcessLifetimeContext(opts.processLifetime !== "persistent"),
+    summary: "", // always included
   });
 
   // ── ESSENTIAL: Configuration awareness ──────────────────────
@@ -652,17 +659,33 @@ function buildKnowledgeContext(): string | null {
   return lines.join("\n");
 }
 
-function buildProcessLifetimeContext(): string {
+function buildProcessLifetimeContext(oneShot: boolean): string {
+  const detachAndVerify = [
+    `- To detach a job so it survives, escape your process group and capture output:`,
+    `  - Linux: \`setsid nohup <cmd> > /tmp/<job>.log 2>&1 &\``,
+    `  - macOS (no \`setsid\`): \`nohup <cmd> > /tmp/<job>.log 2>&1 &\` then \`disown\` (survives normal exit, but not a forced kill of the process group)`,
+    `  - Check \`command -v setsid\` when unsure which applies.`,
+    `- You will NOT be notified when a detached job finishes — you cannot wake yourself up. Either ask the user to check back later, or register a cron job (gateway \`/api/cron\`) to follow up.`,
+    `- Verify BEFORE reporting done: read the logfile and check the expected artifact (uploaded file, build output, etc.). If the logfile is missing or incomplete, say so — never claim completion you have not verified.`,
+  ];
+
+  if (!oneShot) {
+    return [
+      `## Process lifetime`,
+      `This session runs in a persistent interactive process: background tasks survive across turns, but they are killed when the session ends, times out, or the gateway restarts.`,
+      ``,
+      `- For a job that must survive session shutdown, detach it (below) instead of relying on a plain background task.`,
+      ...detachAndVerify,
+    ].join("\n");
+  }
+
   return [
     `## Process lifetime (background tasks die when your turn ends)`,
-    `Your process is one-shot: it is spawned for this turn and exits as soon as you deliver your final answer. Anything you started in the background (\`&\`, run_in_background Bash tasks) lives in the SAME process group and is killed with it — silently, with no error and no notification.`,
+    `Your process is one-shot: it is spawned for this turn and exits as soon as you deliver your final answer. Anything you started in the background (\`&\`, run_in_background Bash tasks) lives in the SAME process group and dies with it — silently, with no error and no notification.`,
     ``,
-    `- NEVER start a background job and reply "I'll report back when it's done" — the job dies the moment your turn ends, and nobody is told. This is different from an interactive CLI, where the CLI outlives the turn.`,
+    `- NEVER start a plain background job and reply "I'll report back when it's done" — the job dies the moment your turn ends, and nobody is told. This is different from an interactive CLI, where the CLI outlives the turn.`,
     `- If a job fits within this turn, run it in the FOREGROUND and wait for it to finish before answering.`,
-    `- If a job must outlive the turn, fully detach it from your process group and capture its output:`,
-    `  \`setsid nohup <cmd> > /tmp/<job>.log 2>&1 &\``,
-    `  Then tell the user it is running detached, and in a LATER turn verify by reading the logfile and checking the expected artifact (uploaded file, build output, etc.).`,
-    `- Never report a detached job as done without verifying the artifact. If the logfile is missing or incomplete, say so.`,
+    ...detachAndVerify,
   ].join("\n");
 }
 
