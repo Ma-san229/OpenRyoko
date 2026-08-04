@@ -101,6 +101,20 @@ describe("deliverToOriginConnector", () => {
     expect(replyMessage).not.toHaveBeenCalled();
   });
 
+  it("isUndeliveredToOrigin: web session (pseudo connector \"web\") is NOT an undelivered failure", async () => {
+    const { isUndeliveredToOrigin } = await import("../origin-delivery.js");
+    // Production web sessions: createSession defaults connector to the source.
+    const webSession = makeSession({ connector: "web", source: "web", replyContext: { source: "web" } as never });
+    expect(isUndeliveredToOrigin("no_target", webSession)).toBe(false);
+
+    // A Slack session whose connector is missing/down IS an undelivered failure.
+    const slackSession = makeSession();
+    expect(isUndeliveredToOrigin("no_target", slackSession)).toBe(true);
+    expect(isUndeliveredToOrigin("failed", webSession)).toBe(true);
+    expect(isUndeliveredToOrigin("suppressed", slackSession)).toBe(false);
+    expect(isUndeliveredToOrigin("delivered", slackSession)).toBe(false);
+  });
+
   it("retries a transient connector error and delivers", async () => {
     const { connector, replyMessage } = makeConnector();
     replyMessage.mockRejectedValueOnce(new Error("slack down"));
