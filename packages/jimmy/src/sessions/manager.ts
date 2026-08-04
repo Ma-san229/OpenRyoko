@@ -22,6 +22,7 @@ import {
 import { notifyParentSession, notifyRateLimited, notifyRateLimitResumed, notifyDiscordChannel } from "./callbacks.js";
 import { buildContext } from "./context.js";
 import { normalizeDelivery, normalizeTurns, deliverPublic, type DeliveryContext } from "./reply-disposition.js";
+import { deliverToOriginConnector } from "./origin-delivery.js";
 import { SessionQueue } from "./queue.js";
 import { JINN_HOME } from "../shared/paths.js";
 import { logger } from "../shared/logger.js";
@@ -333,23 +334,7 @@ export class SessionManager {
 
       logger.info(`Delivering background completion for session ${sessionId} (${text.length} chars)`);
 
-      const connector = session.connector ? this.connectorProvider().get(session.connector) : undefined;
-      if (connector && session.replyContext) {
-        const target = connector.reconstructTarget(session.replyContext);
-        const meta = (session.transportMeta ?? {}) as Record<string, unknown>;
-        const isDM = meta.channelType === "im";
-        const ctx: DeliveryContext = {
-          // Unsolicited follow-up: never force a SAFE_ACK, just sanitize.
-          addressed: false,
-          channelExternal: isDM ? false : meta.channelExternal === undefined ? true : meta.channelExternal === true,
-          isDM,
-          canReact: connector.getCapabilities().reactions,
-        };
-        const { publicAction } = normalizeDelivery(text, ctx);
-        await deliverPublic(connector, target, publicAction).catch((err) => {
-          logger.warn(`Background completion delivery failed for ${sessionId}: ${err instanceof Error ? err.message : String(err)}`);
-        });
-      }
+      await deliverToOriginConnector(session, text, this.connectorProvider());
 
       // Child (sub-)session: this late completion IS the "完了通知" the parent
       // was waiting for.

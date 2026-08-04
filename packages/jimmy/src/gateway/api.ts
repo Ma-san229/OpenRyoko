@@ -28,6 +28,7 @@ import {
   getFile,
 } from "../sessions/registry.js";
 import { forkEngineSession } from "../sessions/fork.js";
+import { deliverToOriginConnector } from "../sessions/origin-delivery.js";
 import {
   CONFIG_PATH,
   CRON_JOBS,
@@ -180,12 +181,12 @@ function dispatchWebSessionRun(
   engine: Engine,
   config: JinnConfig,
   context: ApiContext,
-  opts?: { delayMs?: number; queueItemId?: string; attachments?: string[] },
+  opts?: { delayMs?: number; queueItemId?: string; attachments?: string[]; deliverToConnector?: boolean },
 ): void {
   const run = async () => {
     await context.sessionManager.getQueue().enqueue(session.sessionKey || session.sourceRef, async () => {
       context.emit("session:started", { sessionId: session.id });
-      await runWebSession(session, prompt, engine, config, context, opts?.attachments);
+      await runWebSession(session, prompt, engine, config, context, opts?.attachments, opts?.deliverToConnector);
     }, opts?.queueItemId);
   };
 
@@ -911,7 +912,14 @@ export async function handleApiRequest(
       const queueItemId = enqueueQueueItem(session.id, sessionKey, prompt);
       context.emit("queue:updated", { sessionId: session.id, sessionKey });
 
-      dispatchWebSessionRun(session, prompt, engine, config, context, { queueItemId, attachments: attachmentPaths.length > 0 ? attachmentPaths : undefined });
+      dispatchWebSessionRun(session, prompt, engine, config, context, {
+        queueItemId,
+        attachments: attachmentPaths.length > 0 ? attachmentPaths : undefined,
+        // A notification wake-up (detached job finished, child callback) runs
+        // on this connector-less path; deliver the answer back to the origin
+        // conversation so e.g. a Slack thread is not left waiting silently.
+        deliverToConnector: isNotification,
+      });
 
       return json(res, { status: "queued", sessionId: session.id });
     }
@@ -2243,6 +2251,11 @@ async function runWebSession(
   config: JinnConfig,
   context: ApiContext,
   attachments?: string[],
+  /** Deliver the final answer to the session's origin connector (Slack thread
+   *  etc.). Set for notification-triggered wake-ups: this run path has no
+   *  connector of its own, so without explicit delivery a woken Slack session
+   *  would compute its reply and post it nowhere (issue #38 follow-up). */
+  deliverToConnector?: boolean,
 ): Promise<void> {
   const currentSession = getSession(session.id);
   if (!currentSession) {
@@ -2482,6 +2495,9 @@ async function runWebSession(
           });
           if (completedFallback) {
             notifyParentSession(completedFallback, { result: fallbackResult.result, error: fallbackResult.error ?? null, cost: fallbackResult.cost, durationMs: fallbackResult.durationMs }, { alwaysNotify: employee?.alwaysNotify });
+            if (deliverToConnector && fallbackResult.result && !fallbackResult.error) {
+              await deliverToOriginConnector(completedFallback, fallbackResult.result, context.connectors);
+            }
           }
 
           context.emit("session:completed", {
@@ -2634,6 +2650,9 @@ async function runWebSession(
               `✅ Claude usage limit cleared. Session ${currentSession.id}${currentSession.employee ? ` (${currentSession.employee})` : ""} resumed.`,
             );
             notifyParentSession(completedAfterRetry, { result: retryResult.result, error: retryResult.error ?? null, cost: retryResult.cost, durationMs: retryResult.durationMs }, { alwaysNotify: employee?.alwaysNotify });
+            if (deliverToConnector && retryResult.result && !retryResult.error) {
+              await deliverToOriginConnector(completedAfterRetry, retryResult.result, context.connectors);
+            }
           }
 
           context.emit("session:completed", {
@@ -2696,6 +2715,9 @@ async function runWebSession(
     }
     if (completedSession) {
       notifyParentSession(completedSession, { result: result.result, error: result.error ?? null, cost: result.cost, durationMs: result.durationMs }, { alwaysNotify: employee?.alwaysNotify });
+      if (deliverToConnector && result.result && !result.error) {
+        await deliverToOriginConnector(completedSession, result.result, context.connectors);
+      }
     }
 
     context.emit("session:completed", {
