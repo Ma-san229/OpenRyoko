@@ -73,10 +73,21 @@ export async function deliverToOriginConnector(
   return "failed";
 }
 
+/** A reply_context that actually points at a conversation. Web/API sessions
+ *  store a synthetic context ({source: "web"}) AND a pseudo connector name
+ *  ("web" — createSession defaults connector to the source), so the connector
+ *  field alone cannot distinguish "unreachable customer thread" from "there
+ *  was never a thread to reach". */
+function hasAddressableTarget(session: Session): boolean {
+  const rc = session.replyContext as Record<string, unknown> | null;
+  if (!rc) return false;
+  return [rc.channel, rc.chatId, rc.to].some((v) => typeof v === "string" && v.length > 0);
+}
+
 /** True when this delivery outcome means a connector-origin conversation was
  *  left without its answer and the caller must persist that fact. */
 export function isUndeliveredToOrigin(result: OriginDeliveryResult, session: Session): boolean {
-  return result === "failed" || (result === "no_target" && !!session.connector);
+  return result === "failed" || (result === "no_target" && hasAddressableTarget(session));
 }
 
 /**
