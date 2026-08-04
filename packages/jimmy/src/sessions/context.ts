@@ -154,7 +154,7 @@ export function buildContext(opts: {
   });
 
   // ── ESSENTIAL: Detached jobs whose wake-up never arrived ────
-  const jobsCtx = buildDetachedJobsContext();
+  const jobsCtx = buildDetachedJobsContext(opts.sessionId);
   if (jobsCtx) {
     sections.push({
       tier: Tier.ESSENTIAL,
@@ -708,18 +708,25 @@ function buildProcessLifetimeContext(oneShot: boolean, sessionId?: string): stri
  * them here guarantees "the next turn detects it" — a finished job can be
  * delayed, but never silently lost (issue #38 follow-up).
  */
-function buildDetachedJobsContext(): string | null {
+export function buildDetachedJobsContext(sessionId?: string, jobsDir?: string): string | null {
+  // Strictly scoped to THIS session's own jobs: another customer's job names,
+  // log paths and session ids must never leak into this prompt.
+  if (!sessionId) return null;
   let attention: import("../jobs/state.js").JobAttention[];
   try {
-    attention = findJobsNeedingAttention();
+    attention = findJobsNeedingAttention(jobsDir).filter((a) => a.state.sessionId === sessionId);
   } catch {
     return null;
   }
   if (attention.length === 0) return null;
 
+  // Job names/paths come from earlier agent turns; keep them inert in the
+  // prompt (no backticks/newlines that could break out of the list format).
+  const inert = (s: string) => s.replace(/[`\r\n]+/g, " ").slice(0, 200);
+
   const lines = [
     `## Detached jobs needing attention`,
-    `These detached jobs finished (or their monitor died) but their wake-up notification never reached a session. Handle them FIRST — the conversation that started them may still be waiting:`,
+    `These detached jobs OF THIS SESSION finished (or their monitor died) but their wake-up notification never arrived. Handle them FIRST — the conversation that started them may still be waiting:`,
   ];
   for (const { kind, state } of attention) {
     const outcome = kind === "orphaned"
@@ -727,9 +734,9 @@ function buildDetachedJobsContext(): string | null {
       : state.timedOut
         ? `timed out after ${state.timeoutSec}s`
         : `exit ${state.exitCode ?? "?"}`;
-    lines.push(`- \`${state.id}\` (${state.name}) — ${outcome}; log: \`${state.logFile}\`; session: ${state.sessionId}`);
+    lines.push(`- \`${state.id}\` (${inert(state.name)}) — ${outcome}; log: \`${inert(state.logFile)}\``);
   }
-  lines.push(`Read each log, complete or recover the deferred work, then delete the state file under \`~/.ryoko/jobs/\` so this list clears.`);
+  lines.push(`Read each log, complete or recover the deferred work, then delete the job's state file under \`~/.ryoko/jobs/\` so this list clears.`);
   return lines.join("\n");
 }
 

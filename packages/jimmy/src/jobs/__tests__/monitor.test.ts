@@ -117,4 +117,36 @@ describe("runJobMonitor", () => {
     expect(await runJobMonitor("nope", { jobsDir: dir })).toBeNull();
     expect(received).toHaveLength(0);
   });
+
+  it("timeout kills the whole process tree, not just the shell", async () => {
+    const marker = `sleep 61.234`;
+    seedJob({ command: `${marker} & ${marker} & wait`, timeoutSec: 1 });
+    const final = await runJobMonitor("j1", { jobsDir: dir, retryDelaysMs: [10] });
+
+    expect(final?.timedOut).toBe(true);
+    // The backgrounded sleeps shared the job's process group — none survive.
+    const { execSync } = await import("node:child_process");
+    let survivors = "";
+    try {
+      survivors = execSync(`pgrep -f "${marker}" || true`, { encoding: "utf8" }).trim();
+    } catch {
+      survivors = "";
+    }
+    expect(survivors).toBe("");
+  }, 20_000);
+
+  it("two concurrent monitors on the same job run the command and notify only once", async () => {
+    seedJob({ command: "echo once >> " + path.join(dir, "ran.txt") });
+    const [a, b] = await Promise.all([
+      runJobMonitor("j1", { jobsDir: dir, retryDelaysMs: [10] }),
+      runJobMonitor("j1", { jobsDir: dir, retryDelaysMs: [10] }),
+    ]);
+
+    // One claimed and finished; the other bailed at the claim.
+    const statuses = [a?.status, b?.status].sort();
+    expect(statuses).toContain("notified");
+    expect(received).toHaveLength(1);
+    const runs = fs.readFileSync(path.join(dir, "ran.txt"), "utf8").trim().split("\n");
+    expect(runs).toHaveLength(1);
+  });
 });

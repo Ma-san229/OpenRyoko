@@ -195,8 +195,16 @@ program
     .option("--timeout <sec>", "この秒数を超えたらジョブをkillして失敗通知する")
     .option("--log <path>", "ログファイルのパス（省略時は ~/.ryoko/jobs/logs/<id>.log）")
     .option("--gateway <url>", "gateway URL（loopbackのみ許可。省略時はconfigのポート）")
-    .argument("<command...>", "実行するシェルコマンド（-- の後に書く）")
+    .argument("<command...>", "実行するシェルコマンド。クォートした1つの文字列で渡すこと（例: -- 'cd /x && make'）")
     .action(async (commandParts: string[], opts: { name: string; session: string; timeout?: string; log?: string; gateway?: string }) => {
+      let timeoutSec: number | undefined;
+      if (opts.timeout !== undefined) {
+        timeoutSec = Number(opts.timeout);
+        if (!Number.isFinite(timeoutSec) || timeoutSec <= 0) {
+          console.error(`--timeout must be a positive number of seconds (got "${opts.timeout}")`);
+          process.exit(1);
+        }
+      }
       const { launchDetachedJob } = await import("../src/jobs/run.js");
       const state = launchDetachedJob({
         name: opts.name,
@@ -204,7 +212,7 @@ program
         command: commandParts.join(" "),
         gatewayUrl: opts.gateway,
         logFile: opts.log,
-        timeoutSec: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
+        timeoutSec,
       });
       console.log(`Detached job started: ${state.id}`);
       console.log(`  log:     ${state.logFile}`);

@@ -14,21 +14,32 @@ import { logger } from "../shared/logger.js";
  *
  * Without this, a woken Slack session computes its answer and posts it
  * nowhere — the customer thread stays silent (issue #38 follow-up).
- *
- * Returns true when a public action was attempted on the connector.
  */
+export type OriginDeliveryResult =
+  /** A public action reached the connector. */
+  | "delivered"
+  /** Nothing to deliver: web session, no reply target, or disposition "none". */
+  | "skipped"
+  /** The connector call failed after retries — the caller MUST surface this. */
+  | "failed";
+
+const RETRY_DELAYS_MS = [2_000, 5_000];
+
 export async function deliverToOriginConnector(
   session: Session,
   text: string,
   connectors: Map<string, Connector>,
-): Promise<boolean> {
-  if (!text.trim()) return false;
+  retryDelaysMs: number[] = RETRY_DELAYS_MS,
+): Promise<OriginDeliveryResult> {
+  if (!text.trim()) return "skipped";
   const connector = session.connector ? connectors.get(session.connector) : undefined;
-  if (!connector || !session.replyContext) return false;
-  // Web sessions store a synthetic replyContext with no addressable target.
-  if (typeof session.replyContext.channel !== "string" || !session.replyContext.channel) return false;
+  if (!connector || !session.replyContext) return "skipped";
 
   const target = connector.reconstructTarget(session.replyContext);
+  // Web sessions store a synthetic replyContext that reconstructs to an empty
+  // target — nothing addressable to post to.
+  if (!target.channel) return "skipped";
+
   const meta = (session.transportMeta ?? {}) as Record<string, unknown>;
   const isDM = meta.channelType === "im";
   const ctx: DeliveryContext = {
@@ -39,12 +50,20 @@ export async function deliverToOriginConnector(
     canReact: connector.getCapabilities().reactions,
   };
   const { publicAction } = normalizeDelivery(text, ctx);
-  if (publicAction.kind === "none") return false;
-  try {
-    await deliverPublic(connector, target, publicAction);
-    return true;
-  } catch (err) {
-    logger.warn(`Origin-connector delivery failed for session ${session.id}: ${err instanceof Error ? err.message : String(err)}`);
-    return false;
+  if (publicAction.kind === "none") return "skipped";
+
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= retryDelaysMs.length; attempt++) {
+    try {
+      await deliverPublic(connector, target, publicAction);
+      return "delivered";
+    } catch (err) {
+      lastErr = err;
+      if (attempt < retryDelaysMs.length) {
+        await new Promise((r) => setTimeout(r, retryDelaysMs[attempt]));
+      }
+    }
   }
+  logger.warn(`Origin-connector delivery failed for session ${session.id}: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}`);
+  return "failed";
 }

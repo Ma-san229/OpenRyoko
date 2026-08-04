@@ -115,7 +115,9 @@ export async function sendJobNotification(
       const res = await fetchFn(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message, role: "notification" }),
+        // dedupeKey: if the gateway accepted an earlier attempt but the
+        // response was lost, the retry must not enqueue a second turn.
+        body: JSON.stringify({ message, role: "notification", dedupeKey: `job:${state.id}` }),
       });
       if (res.ok) return { ok: true };
       lastError = `gateway responded ${res.status}`;

@@ -48,6 +48,17 @@ describe("job state files", () => {
     expect(readJobState("bad", dir)).toBeNull();
   });
 
+  it("rejects a state file with a mismatched id or missing fields (schema guard)", () => {
+    fs.writeFileSync(path.join(dir, "spoof.json"), JSON.stringify({ ...makeState(), id: "other" }));
+    expect(readJobState("spoof", dir)).toBeNull();
+    fs.writeFileSync(path.join(dir, "thin.json"), JSON.stringify({ id: "thin", status: "running" }));
+    expect(readJobState("thin", dir)).toBeNull();
+  });
+
+  it("rejects a path-traversal job id", () => {
+    expect(readJobState("../evil", dir)).toBeNull();
+  });
+
   it("lists states sorted by startedAt and skips corrupt files", () => {
     writeJobState(makeState({ id: "b", startedAt: "2026-08-04T02:00:00Z" }), dir);
     writeJobState(makeState({ id: "a", startedAt: "2026-08-04T01:00:00Z" }), dir);
@@ -76,12 +87,18 @@ describe("job state files", () => {
       ]);
     });
 
-    it("flags a running job whose monitor is dead as orphaned", () => {
-      writeJobState(makeState({ id: "orphan", status: "running", monitorPid: 2 ** 30 }), dir);
-      writeJobState(makeState({ id: "alive", status: "running", monitorPid: process.pid }), dir);
+    it("flags a running job whose monitor is dead as orphaned (after the claim grace period)", () => {
+      const oldStart = new Date(Date.now() - 5 * 60_000).toISOString();
+      writeJobState(makeState({ id: "orphan", status: "running", monitorPid: 2 ** 30, startedAt: oldStart }), dir);
+      writeJobState(makeState({ id: "alive", status: "running", monitorPid: process.pid, startedAt: oldStart }), dir);
       const attention = findJobsNeedingAttention(dir);
       expect(attention).toHaveLength(1);
       expect(attention[0]).toMatchObject({ kind: "orphaned", state: { id: "orphan" } });
+    });
+
+    it("gives a just-launched job grace before calling it orphaned (pid not yet claimed)", () => {
+      writeJobState(makeState({ id: "launching", status: "running", monitorPid: 0 }), dir);
+      expect(findJobsNeedingAttention(dir)).toHaveLength(0);
     });
   });
 

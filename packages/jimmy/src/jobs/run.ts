@@ -53,9 +53,13 @@ export function launchDetachedJob(opts: LaunchJobOpts): JobState {
 
   const id = `${sanitizeName(opts.name)}-${Date.now()}-${crypto.randomBytes(3).toString("hex")}`;
   const logDir = path.join(jobsDir, "logs");
-  fs.mkdirSync(logDir, { recursive: true });
+  fs.mkdirSync(logDir, { recursive: true, mode: 0o700 });
   const logFile = opts.logFile ?? path.join(logDir, `${id}.log`);
-  fs.writeFileSync(logFile, `[job ${id}] ${new Date().toISOString()} :: ${opts.command}\n`, { flag: "a" });
+  fs.writeFileSync(logFile, `[job ${id}] ${new Date().toISOString()} :: ${opts.command}\n`, { flag: "a", mode: 0o600 });
+
+  if (opts.timeoutSec !== undefined && (!Number.isFinite(opts.timeoutSec) || opts.timeoutSec <= 0)) {
+    throw new Error(`--timeout must be a positive number of seconds (got ${opts.timeoutSec})`);
+  }
 
   const state: JobState = {
     id,
@@ -64,6 +68,9 @@ export function launchDetachedJob(opts: LaunchJobOpts): JobState {
     gatewayUrl,
     command: opts.command,
     logFile,
+    // The claimed monitor records its own pid — the launcher must not write
+    // the state again after spawn, or it could revert a fast job's terminal
+    // status back to "running".
     monitorPid: 0,
     startedAt: new Date().toISOString(),
     ...(opts.timeoutSec ? { timeoutSec: opts.timeoutSec } : {}),
@@ -79,7 +86,5 @@ export function launchDetachedJob(opts: LaunchJobOpts): JobState {
   });
   child.unref();
 
-  const withPid: JobState = { ...state, monitorPid: child.pid ?? 0 };
-  writeJobState(withPid, jobsDir);
-  return withPid;
+  return { ...state, monitorPid: child.pid ?? 0 };
 }

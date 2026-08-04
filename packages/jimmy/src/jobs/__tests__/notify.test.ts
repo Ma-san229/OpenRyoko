@@ -95,7 +95,7 @@ describe("sendJobNotification", () => {
     expect(fetchFn).toHaveBeenCalledTimes(1);
     const [url, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("http://127.0.0.1:7777/api/sessions/sess-1/message");
-    expect(JSON.parse(String(init.body))).toEqual({ message: "msg", role: "notification" });
+    expect(JSON.parse(String(init.body))).toEqual({ message: "msg", role: "notification", dedupeKey: "job:pdf-build-1" });
   });
 
   it("retries through gateway downtime and succeeds exactly once", async () => {

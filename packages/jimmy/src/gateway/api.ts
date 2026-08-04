@@ -109,7 +109,19 @@ export function resumePendingWebQueueItems(context: ApiContext): void {
       cancelQueueItem(item.id);
       continue;
     }
-    if (session.source !== "web") continue;
+    // Connector-origin sessions normally get their runs from the connector
+    // route, EXCEPT notification wake-ups (detached jobs, child callbacks):
+    // the job monitor already got its 200 and will never re-send, so a
+    // restart here would strand the wake-up forever. Detect those by the
+    // persisted notification message matching the queued prompt and resume
+    // them with origin-connector delivery.
+    let deliverToConnector = false;
+    if (session.source !== "web") {
+      const messages = getMessages(session.id);
+      const match = [...messages].reverse().find((m) => m.content === item.prompt);
+      if (match?.role !== "notification") continue;
+      deliverToConnector = true;
+    }
     session = maybeRevertEngineOverride(session);
 
     const config = context.getConfig();
@@ -123,7 +135,7 @@ export function resumePendingWebQueueItems(context: ApiContext): void {
     // Ensure the session is in a runnable state
     updateSession(session.id, { status: "running", lastActivity: new Date().toISOString(), lastError: null });
 
-    dispatchWebSessionRun(session, item.prompt, engine, config, context, { queueItemId: item.id });
+    dispatchWebSessionRun(session, item.prompt, engine, config, context, { queueItemId: item.id, deliverToConnector });
     resumed++;
   }
 
@@ -173,6 +185,39 @@ function maybeRevertEngineOverride(session: Session): Session {
     transportMeta: nextMeta as any,
     lastError: null,
   }) ?? session;
+}
+
+/**
+ * A woken turn computed its reply but the connector rejected every attempt.
+ * The customer conversation has NOT seen the answer — persist that fact into
+ * the session (message + lastError) so the next turn (or the operator) sees
+ * it instead of the failure vanishing into a log line.
+ */
+function recordFailedOriginDelivery(session: Session, context: ApiContext): void {
+  const note =
+    `⚠️ Your reply above was NOT delivered to the original conversation (connector "${session.connector}" failed after retries). ` +
+    `The customer has not seen it — repost it (send_message / reply) as soon as the connector recovers.`;
+  try {
+    insertMessage(session.id, "notification", note);
+    updateSession(session.id, { lastError: "origin delivery failed — reply not posted to the original conversation" });
+    context.emit("session:notification", { sessionId: session.id, message: note });
+  } catch (err) {
+    logger.error(`Failed to record origin-delivery failure for session ${session.id}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+// In-memory idempotency keys for notification wake-ups. The persisted-message
+// comparison in the /message handler covers gateway restarts; this map covers
+// the common case cheaply and caps unbounded growth by TTL pruning on write.
+const seenDedupeKeys = new Map<string, number>();
+const DEDUPE_TTL_MS = 60 * 60 * 1000;
+
+function rememberDedupeKey(key: string): void {
+  const now = Date.now();
+  for (const [k, t] of seenDedupeKeys) {
+    if (now - t > DEDUPE_TTL_MS) seenDedupeKeys.delete(k);
+  }
+  seenDedupeKeys.set(key, now);
 }
 
 function dispatchWebSessionRun(
@@ -852,6 +897,28 @@ export async function handleApiRequest(
       // Allow internal callers (e.g. child session callbacks) to specify a non-user role
       const messageRole: string = body.role === "notification" ? "notification" : "user";
       const isNotification = messageRole === "notification";
+
+      // Notification wake-ups are a loopback-only mechanism (job monitors,
+      // child-session callbacks). A remote caller must not be able to wake an
+      // arbitrary session — the woken turn can post into its origin Slack
+      // conversation, so this would be a remote-to-customer-channel bridge.
+      if (isNotification && (!req.socket.remoteAddress || !HOOK_LOOPBACK.has(req.socket.remoteAddress))) {
+        return json(res, { error: "notification role is loopback-only" }, 403);
+      }
+
+      // Idempotency: a job monitor retries its wake-up when a response is
+      // lost after the gateway already accepted it. Same dedupeKey (+ an
+      // identical persisted notification, which survives restarts) → don't
+      // enqueue a second engine turn.
+      const dedupeKey = typeof body.dedupeKey === "string" && body.dedupeKey.trim() ? body.dedupeKey.trim() : null;
+      if (isNotification && dedupeKey) {
+        const duplicate = seenDedupeKeys.has(dedupeKey)
+          || getMessages(session.id).some((m) => m.role === "notification" && m.content === prompt);
+        if (duplicate) {
+          return json(res, { status: "duplicate", sessionId: session.id });
+        }
+        rememberDedupeKey(dedupeKey);
+      }
 
       const config = context.getConfig();
       const engine = context.sessionManager.getEngine(session.engine);
@@ -2496,7 +2563,8 @@ async function runWebSession(
           if (completedFallback) {
             notifyParentSession(completedFallback, { result: fallbackResult.result, error: fallbackResult.error ?? null, cost: fallbackResult.cost, durationMs: fallbackResult.durationMs }, { alwaysNotify: employee?.alwaysNotify });
             if (deliverToConnector && fallbackResult.result && !fallbackResult.error) {
-              await deliverToOriginConnector(completedFallback, fallbackResult.result, context.connectors);
+              const delivery = await deliverToOriginConnector(completedFallback, fallbackResult.result, context.connectors);
+              if (delivery === "failed") recordFailedOriginDelivery(completedFallback, context);
             }
           }
 
@@ -2651,7 +2719,8 @@ async function runWebSession(
             );
             notifyParentSession(completedAfterRetry, { result: retryResult.result, error: retryResult.error ?? null, cost: retryResult.cost, durationMs: retryResult.durationMs }, { alwaysNotify: employee?.alwaysNotify });
             if (deliverToConnector && retryResult.result && !retryResult.error) {
-              await deliverToOriginConnector(completedAfterRetry, retryResult.result, context.connectors);
+              const delivery = await deliverToOriginConnector(completedAfterRetry, retryResult.result, context.connectors);
+              if (delivery === "failed") recordFailedOriginDelivery(completedAfterRetry, context);
             }
           }
 
@@ -2716,7 +2785,8 @@ async function runWebSession(
     if (completedSession) {
       notifyParentSession(completedSession, { result: result.result, error: result.error ?? null, cost: result.cost, durationMs: result.durationMs }, { alwaysNotify: employee?.alwaysNotify });
       if (deliverToConnector && result.result && !result.error) {
-        await deliverToOriginConnector(completedSession, result.result, context.connectors);
+        const delivery = await deliverToOriginConnector(completedSession, result.result, context.connectors);
+        if (delivery === "failed") recordFailedOriginDelivery(completedSession, context);
       }
     }
 

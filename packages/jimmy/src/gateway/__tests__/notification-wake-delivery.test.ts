@@ -117,6 +117,36 @@ describe("notification wake-up delivers the reply to the origin connector", () =
     expect(text).toBe("資料が完成しました。アップロード済みです。");
   });
 
+  it("a duplicate dedupeKey does not enqueue a second turn (monitor retry after lost response)", async () => {
+    replyMessage.mockClear();
+    const body = JSON.stringify({
+      message: '✅ Detached job "dedupe-job" completed successfully (exit 0).',
+      role: "notification",
+      dedupeKey: "job:dedupe-job-1",
+    });
+    const first = await fetch(`${baseUrl}/api/sessions/${sessionId}/message`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+    });
+    expect(first.status).toBe(200);
+    expect(((await first.json()) as { status: string }).status).toBe("queued");
+
+    const second = await fetch(`${baseUrl}/api/sessions/${sessionId}/message`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+    });
+    expect(second.status).toBe(200);
+    expect(((await second.json()) as { status: string }).status).toBe("duplicate");
+
+    await vi.waitFor(() => {
+      expect(replyMessage).toHaveBeenCalledTimes(1); // one turn, one delivery
+    }, { timeout: 10_000 });
+    await new Promise((r) => setTimeout(r, 1000));
+    expect(replyMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("a plain user message on the web path does NOT auto-post to the connector", async () => {
     replyMessage.mockClear();
     const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/message`, {

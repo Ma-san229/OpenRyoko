@@ -57,7 +57,7 @@ describe("deliverToOriginConnector", () => {
     const { connector, replyMessage } = makeConnector();
     const delivered = await deliverToOriginConnector(makeSession(), "資料が完成しました", new Map([["slack", connector]]));
 
-    expect(delivered).toBe(true);
+    expect(delivered).toBe("delivered");
     expect(replyMessage).toHaveBeenCalledTimes(1);
     const [target, text] = replyMessage.mock.calls[0] as unknown as [Record<string, unknown>, string];
     expect(target).toMatchObject({ channel: "C777", thread: "111.222" });
@@ -80,7 +80,7 @@ describe("deliverToOriginConnector", () => {
     const session = makeSession({ connector: null, replyContext: { source: "web" } as never });
     const delivered = await deliverToOriginConnector(session, "answer", new Map([["slack", connector]]));
 
-    expect(delivered).toBe(false);
+    expect(delivered).toBe("skipped");
     expect(replyMessage).not.toHaveBeenCalled();
   });
 
@@ -89,7 +89,7 @@ describe("deliverToOriginConnector", () => {
     const session = makeSession({ replyContext: { source: "web" } as never });
     const delivered = await deliverToOriginConnector(session, "answer", new Map([["slack", connector]]));
 
-    expect(delivered).toBe(false);
+    expect(delivered).toBe("skipped");
     expect(replyMessage).not.toHaveBeenCalled();
   });
 
@@ -97,15 +97,25 @@ describe("deliverToOriginConnector", () => {
     const { connector, replyMessage } = makeConnector();
     const delivered = await deliverToOriginConnector(makeSession(), "   ", new Map([["slack", connector]]));
 
-    expect(delivered).toBe(false);
+    expect(delivered).toBe("skipped");
     expect(replyMessage).not.toHaveBeenCalled();
   });
 
-  it("survives a connector error without throwing", async () => {
+  it("retries a transient connector error and delivers", async () => {
     const { connector, replyMessage } = makeConnector();
     replyMessage.mockRejectedValueOnce(new Error("slack down"));
-    const delivered = await deliverToOriginConnector(makeSession(), "answer", new Map([["slack", connector]]));
+    const delivered = await deliverToOriginConnector(makeSession(), "answer", new Map([["slack", connector]]), [1]);
 
-    expect(delivered).toBe(false);
+    expect(delivered).toBe("delivered");
+    expect(replyMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns \"failed\" (not skipped) when every attempt fails — caller must surface it", async () => {
+    const { connector, replyMessage } = makeConnector();
+    replyMessage.mockRejectedValue(new Error("slack down"));
+    const delivered = await deliverToOriginConnector(makeSession(), "answer", new Map([["slack", connector]]), [1]);
+
+    expect(delivered).toBe("failed");
+    expect(replyMessage).toHaveBeenCalledTimes(2);
   });
 });
