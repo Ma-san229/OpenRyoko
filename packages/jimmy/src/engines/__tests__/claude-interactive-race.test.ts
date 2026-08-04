@@ -52,6 +52,16 @@ vi.mock("../sse-pty-proxy.js", () => ({
 vi.mock("../shared/claude-settings.js", () => ({
   writeSessionSettings: () => "/tmp/fake-settings.json",
 }));
+// spawn() awaits the shared-OAuth refresh gate before pty.spawn(). Unmocked, it
+// reads the real ~/.claude/.credentials.json — and when that token is within 90s
+// of expiry (or expired), the gate serializes the spawn herd: the first spawn
+// leads and opens a 25s refresh window that blocks every later spawn, so
+// pty.spawn() is never reached within the test's 15ms flush and ptys[] stays
+// empty. These tests exercise the PTY lifecycle, not the OAuth gate — stub it to
+// resolve instantly so they don't depend on the runner's real credential state.
+vi.mock("../../shared/claude-oauth-gate.js", () => ({
+  awaitFreshClaudeCredentials: async () => {},
+}));
 
 import { InteractiveClaudeEngine } from "../claude-interactive.js";
 import { PtyLifecycleManager } from "../pty-lifecycle.js";

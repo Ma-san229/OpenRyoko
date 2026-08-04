@@ -43,6 +43,7 @@ import { getSttStatus, downloadModel, transcribe as sttTranscribe, resolveLangua
 import { JINN_HOME } from "../shared/paths.js";
 import { handleHookPost, LOOPBACK as HOOK_LOOPBACK } from "./hook-endpoint.js";
 import { resolveEffort } from "../shared/effort.js";
+import { explicitThread } from "../shared/threading.js";
 import { effortLevelsForModel, invalidateModelRegistry } from "../shared/models.js";
 import { computeNextRetryDelayMs, computeRateLimitDeadlineMs, detectRateLimit } from "../shared/rateLimit.js";
 import { getClaudeExpectedResetAt, recordClaudeRateLimit } from "../shared/usageAwareness.js";
@@ -1608,10 +1609,17 @@ Handle this as a priority request from a colleague.`;
       let messageId: string | undefined;
 
       switch (action) {
-        case "sendMessage":
+        case "sendMessage": {
           if (!target || !body.text) return badRequest(res, "target and text are required");
-          messageId = (await connector.sendMessage(target, body.text)) as string | undefined;
+          // Same contract as /send: an explicit thread on the target means a
+          // thread reply. Connectors' sendMessage historically dropped
+          // target.thread, landing "thread replies" bare in the channel (#6).
+          const proxyThread = explicitThread(target.thread);
+          messageId = proxyThread
+            ? ((await connector.replyMessage({ ...target, thread: proxyThread }, body.text)) as string | undefined)
+            : ((await connector.sendMessage(target, body.text)) as string | undefined);
           break;
+        }
         case "replyMessage":
           if (!target || !body.text) return badRequest(res, "target and text are required");
           messageId = (await connector.replyMessage(target, body.text)) as string | undefined;
@@ -1650,9 +1658,9 @@ Handle this as a priority request from a colleague.`;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const body = _parsed.body as any;
       if (!body.channel || !body.text) return badRequest(res, "channel and text are required");
-      const hasThread = typeof body.thread === "string" && body.thread.trim().length > 0;
-      const target = { channel: body.channel, thread: body.thread };
-      if (hasThread) {
+      const thread = explicitThread(body.thread);
+      const target = { channel: body.channel, thread };
+      if (thread) {
         await connector.replyMessage(target, body.text);
       } else {
         await connector.sendMessage(target, body.text);
@@ -2275,6 +2283,14 @@ async function runWebSession(
       connectors: Array.from(context.connectors.keys()),
       config,
       sessionId: currentSession.id,
+      // Interactive PTY survives across turns; everything else is a one-shot
+      // process whose background tasks die at turn end (#38).
+      processLifetime:
+        currentSession.engine === "claude" &&
+        config.engines.claude?.interactive === true &&
+        !employee?.sshHost
+          ? "persistent"
+          : "one-shot",
       hierarchy: orgHierarchy,
     });
 
