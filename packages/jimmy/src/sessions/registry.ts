@@ -557,6 +557,21 @@ export function enqueueQueueItem(sessionId: string, sessionKey: string, prompt: 
   return id;
 }
 
+/**
+ * Persist a notification message AND its queue item in one transaction.
+ * Deduped wake-ups (detached job monitors) rely on "message exists ⇒ its
+ * turn is queued or already ran": a crash between the two writes would make
+ * every retry a false duplicate and strand the wake-up forever.
+ */
+export function insertNotificationWithQueueItem(sessionId: string, sessionKey: string, content: string): string {
+  const db = initDb();
+  const tx = db.transaction(() => {
+    insertMessage(sessionId, "notification", content);
+    return enqueueQueueItem(sessionId, sessionKey, content);
+  });
+  return tx();
+}
+
 export function markQueueItemRunning(itemId: string): void {
   const db = initDb();
   db.prepare("UPDATE queue_items SET status = 'running', started_at = ? WHERE id = ?")

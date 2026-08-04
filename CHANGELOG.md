@@ -2,6 +2,22 @@
 
 > **バージョン体系について**: 2026.4.26 から日付ベース (`YYYY.M.D`) のCalVerに移行しました。npm semver の制約上、月・日の leading zero は付けません (例: 4月26日 → `2026.4.26`)。
 
+## [2026.8.5] - 2026-08-04
+
+> 2026.8.4 と同日の追加リリース（npm は同一 version の再 publish 不可のため番号を +1。2026.7.25 / 2026.7.26 の前例に倣う）。
+
+### Features（Issue #38 フォローアップ: 自己起床する切り離しジョブ）
+- **`ryoko job run` — 自己起床ジョブランナー**: ターンを跨ぐ長時間ジョブを 1 コマンドで切り離し実行。ジョブ終了時（成功 / 失敗 / タイムアウトすべて）に元のセッションを自動起床し、終了コード・ログパス・ログ末尾 40 行を通知する。monitor プロセスは `detached`（POSIX で setsid(2) 相当。macOS でも外部 `setsid` 不要）で自分のプロセスグループを持ち、ターン終了・エンジンの group kill・gateway 再起動を生き延びる。exactly-once 保証（O_EXCL claim ＋ dedupeKey ＋ sqlite トランザクション）、タイムアウト時のプロセスツリー kill、状態ファイル（`~/.ryoko/jobs/`）による孤児検知付き。`ryoko job list` で一覧。
+- **notification 起床ターンの返信を元の会話へ配信**: `POST /api/sessions/:id/message` (`role: notification`) で起こされたターンの最終回答を、セッションの reply_context から元の Slack チャンネル / スレッドへ配信（disposition trailer の除去も同経路で担保）。gateway 再起動後の復元にも対応。配信失敗はセッションに永続記録され、無言の放置にならない。notification role は loopback 限定（外部から任意セッションを起こす口は作らない）。
+- **system prompt の更新**: Process lifetime セクションの第一選択を `ryoko job run`（実セッション ID 埋め込み）に更新。起こされないまま終わったジョブ（notify_failed / orphaned）は次ターンの context に自セッション分のみ注入され、「起こされないまま放置」を構造的に防ぐ。
+
+## [2026.8.4] - 2026-08-04
+
+### Fixes
+- **バックグラウンドタスクの寿命を system prompt で警告 (#38)**: one-shot エンジンプロセスのターン終了でバックグラウンドタスクがプロセスグループごと無言で死ぬ問題への予防策。`## Process lifetime` セクション（ESSENTIAL）を注入し、フォアグラウンド待機 / 切り離し手順（Linux: setsid、macOS: nohup+disown）/ 検証してから完了報告、を案内。interactive PTY セッションには persistent 変種を出し分け。
+- **Slack sendMessage が target.thread を無視する非対称を解消 (#6)**: `explicitThread` ヘルパーで `/send`・proxy (`action: sendMessage`)・Slack コネクタの 3 経路を統一。proxy 経由の全コネクタで thread 指定がスレッド返信として配送されるようになった。
+- **PTY レーステストの claude-oauth-gate 依存を解消**: 環境依存で落ちていたテスト 5 件を安定化。
+
 ## [2026.7.26] - 2026-07-25
 
 > 2026.7.25 と同日の追加リリース（npm は同一 version の再 publish 不可のため番号を +1。2026.7.4 / 2026.7.5 が同日リリースだった前例に倣う）。

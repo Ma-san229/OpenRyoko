@@ -21,6 +21,7 @@ import {
   insertMessage,
   getMessages,
   enqueueQueueItem,
+  insertNotificationWithQueueItem,
   cancelQueueItem,
   getQueueItems,
   cancelAllPendingQueueItems,
@@ -28,6 +29,7 @@ import {
   getFile,
 } from "../sessions/registry.js";
 import { forkEngineSession } from "../sessions/fork.js";
+import { deliverToOriginConnector, isUndeliveredToOrigin, recordFailedOriginDelivery } from "../sessions/origin-delivery.js";
 import {
   CONFIG_PATH,
   CRON_JOBS,
@@ -108,7 +110,19 @@ export function resumePendingWebQueueItems(context: ApiContext): void {
       cancelQueueItem(item.id);
       continue;
     }
-    if (session.source !== "web") continue;
+    // Connector-origin sessions normally get their runs from the connector
+    // route, EXCEPT notification wake-ups (detached jobs, child callbacks):
+    // the job monitor already got its 200 and will never re-send, so a
+    // restart here would strand the wake-up forever. Detect those by the
+    // persisted notification message matching the queued prompt and resume
+    // them with origin-connector delivery.
+    let deliverToConnector = false;
+    if (session.source !== "web") {
+      const messages = getMessages(session.id);
+      const match = [...messages].reverse().find((m) => m.content === item.prompt);
+      if (match?.role !== "notification") continue;
+      deliverToConnector = true;
+    }
     session = maybeRevertEngineOverride(session);
 
     const config = context.getConfig();
@@ -122,7 +136,7 @@ export function resumePendingWebQueueItems(context: ApiContext): void {
     // Ensure the session is in a runnable state
     updateSession(session.id, { status: "running", lastActivity: new Date().toISOString(), lastError: null });
 
-    dispatchWebSessionRun(session, item.prompt, engine, config, context, { queueItemId: item.id });
+    dispatchWebSessionRun(session, item.prompt, engine, config, context, { queueItemId: item.id, deliverToConnector });
     resumed++;
   }
 
@@ -174,18 +188,32 @@ function maybeRevertEngineOverride(session: Session): Session {
   }) ?? session;
 }
 
+// In-memory idempotency keys for notification wake-ups. The persisted-message
+// comparison in the /message handler covers gateway restarts; this map covers
+// the common case cheaply and caps unbounded growth by TTL pruning on write.
+const seenDedupeKeys = new Map<string, number>();
+const DEDUPE_TTL_MS = 60 * 60 * 1000;
+
+function rememberDedupeKey(key: string): void {
+  const now = Date.now();
+  for (const [k, t] of seenDedupeKeys) {
+    if (now - t > DEDUPE_TTL_MS) seenDedupeKeys.delete(k);
+  }
+  seenDedupeKeys.set(key, now);
+}
+
 function dispatchWebSessionRun(
   session: Session,
   prompt: string,
   engine: Engine,
   config: JinnConfig,
   context: ApiContext,
-  opts?: { delayMs?: number; queueItemId?: string; attachments?: string[] },
+  opts?: { delayMs?: number; queueItemId?: string; attachments?: string[]; deliverToConnector?: boolean },
 ): void {
   const run = async () => {
     await context.sessionManager.getQueue().enqueue(session.sessionKey || session.sourceRef, async () => {
       context.emit("session:started", { sessionId: session.id });
-      await runWebSession(session, prompt, engine, config, context, opts?.attachments);
+      await runWebSession(session, prompt, engine, config, context, opts?.attachments, opts?.deliverToConnector);
     }, opts?.queueItemId);
   };
 
@@ -852,12 +880,41 @@ export async function handleApiRequest(
       const messageRole: string = body.role === "notification" ? "notification" : "user";
       const isNotification = messageRole === "notification";
 
+      // Notification wake-ups are a loopback-only mechanism (job monitors,
+      // child-session callbacks). A remote caller must not be able to wake an
+      // arbitrary session — the woken turn can post into its origin Slack
+      // conversation, so this would be a remote-to-customer-channel bridge.
+      if (isNotification && (!req.socket.remoteAddress || !HOOK_LOOPBACK.has(req.socket.remoteAddress))) {
+        return json(res, { error: "notification role is loopback-only" }, 403);
+      }
+
+      // Idempotency: a job monitor retries its wake-up when a response is
+      // lost after the gateway already accepted it. Same dedupeKey (+ an
+      // identical persisted notification, which survives restarts) → don't
+      // enqueue a second engine turn. The key is only REMEMBERED after the
+      // message + queue item are durably persisted below, so a failure
+      // before that point never turns the retry into a false duplicate.
+      const dedupeKey = typeof body.dedupeKey === "string" && body.dedupeKey.trim() ? body.dedupeKey.trim() : null;
+      const dedupedNotification = isNotification && dedupeKey !== null;
+      if (dedupedNotification) {
+        const duplicate = seenDedupeKeys.has(dedupeKey!)
+          || getMessages(session.id).some((m) => m.role === "notification" && m.content === prompt);
+        if (duplicate) {
+          return json(res, { status: "duplicate", sessionId: session.id });
+        }
+      }
+
       const config = context.getConfig();
       const engine = context.sessionManager.getEngine(session.engine);
       if (!engine) return serverError(res, `Engine "${session.engine}" not available`);
 
-      // Persist the message immediately
-      insertMessage(session.id, messageRole, prompt);
+      // Persist the message immediately. Deduped notifications defer this to
+      // the atomic message+queue-item write below — the duplicate check above
+      // treats "message exists" as "turn queued", so the two writes must
+      // never be separable by a crash.
+      if (!dedupedNotification) {
+        insertMessage(session.id, messageRole, prompt);
+      }
 
       // Emit notification event for UI display (renders as system banner, not user bubble)
       if (isNotification) {
@@ -908,10 +965,20 @@ export async function handleApiRequest(
       const attachmentPaths = resolveAttachmentPaths(body.attachments);
 
       const sessionKey = session.sessionKey || session.sourceRef || session.id;
-      const queueItemId = enqueueQueueItem(session.id, sessionKey, prompt);
+      const queueItemId = dedupedNotification
+        ? insertNotificationWithQueueItem(session.id, sessionKey, prompt)
+        : enqueueQueueItem(session.id, sessionKey, prompt);
+      if (dedupedNotification) rememberDedupeKey(dedupeKey!);
       context.emit("queue:updated", { sessionId: session.id, sessionKey });
 
-      dispatchWebSessionRun(session, prompt, engine, config, context, { queueItemId, attachments: attachmentPaths.length > 0 ? attachmentPaths : undefined });
+      dispatchWebSessionRun(session, prompt, engine, config, context, {
+        queueItemId,
+        attachments: attachmentPaths.length > 0 ? attachmentPaths : undefined,
+        // A notification wake-up (detached job finished, child callback) runs
+        // on this connector-less path; deliver the answer back to the origin
+        // conversation so e.g. a Slack thread is not left waiting silently.
+        deliverToConnector: isNotification,
+      });
 
       return json(res, { status: "queued", sessionId: session.id });
     }
@@ -2243,6 +2310,11 @@ async function runWebSession(
   config: JinnConfig,
   context: ApiContext,
   attachments?: string[],
+  /** Deliver the final answer to the session's origin connector (Slack thread
+   *  etc.). Set for notification-triggered wake-ups: this run path has no
+   *  connector of its own, so without explicit delivery a woken Slack session
+   *  would compute its reply and post it nowhere (issue #38 follow-up). */
+  deliverToConnector?: boolean,
 ): Promise<void> {
   const currentSession = getSession(session.id);
   if (!currentSession) {
@@ -2482,6 +2554,10 @@ async function runWebSession(
           });
           if (completedFallback) {
             notifyParentSession(completedFallback, { result: fallbackResult.result, error: fallbackResult.error ?? null, cost: fallbackResult.cost, durationMs: fallbackResult.durationMs }, { alwaysNotify: employee?.alwaysNotify });
+            if (deliverToConnector && fallbackResult.result && !fallbackResult.error) {
+              const delivery = await deliverToOriginConnector(completedFallback, fallbackResult.result, context.connectors);
+              if (isUndeliveredToOrigin(delivery, completedFallback)) recordFailedOriginDelivery(completedFallback, context.emit);
+            }
           }
 
           context.emit("session:completed", {
@@ -2634,6 +2710,10 @@ async function runWebSession(
               `✅ Claude usage limit cleared. Session ${currentSession.id}${currentSession.employee ? ` (${currentSession.employee})` : ""} resumed.`,
             );
             notifyParentSession(completedAfterRetry, { result: retryResult.result, error: retryResult.error ?? null, cost: retryResult.cost, durationMs: retryResult.durationMs }, { alwaysNotify: employee?.alwaysNotify });
+            if (deliverToConnector && retryResult.result && !retryResult.error) {
+              const delivery = await deliverToOriginConnector(completedAfterRetry, retryResult.result, context.connectors);
+              if (isUndeliveredToOrigin(delivery, completedAfterRetry)) recordFailedOriginDelivery(completedAfterRetry, context.emit);
+            }
           }
 
           context.emit("session:completed", {
@@ -2696,6 +2776,10 @@ async function runWebSession(
     }
     if (completedSession) {
       notifyParentSession(completedSession, { result: result.result, error: result.error ?? null, cost: result.cost, durationMs: result.durationMs }, { alwaysNotify: employee?.alwaysNotify });
+      if (deliverToConnector && result.result && !result.error) {
+        const delivery = await deliverToOriginConnector(completedSession, result.result, context.connectors);
+        if (isUndeliveredToOrigin(delivery, completedSession)) recordFailedOriginDelivery(completedSession, context.emit);
+      }
     }
 
     context.emit("session:completed", {

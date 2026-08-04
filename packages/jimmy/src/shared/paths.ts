@@ -61,6 +61,7 @@ export const SKILLS_DIR = path.join(JINN_HOME, "skills");
 export const DOCS_DIR = path.join(JINN_HOME, "docs");
 export const LOGS_DIR = path.join(JINN_HOME, "logs");
 export const TMP_DIR = path.join(JINN_HOME, "tmp");
+export const JOBS_DIR = path.join(JINN_HOME, "jobs");
 export const MODELS_DIR = path.join(JINN_HOME, "models");
 export const STT_MODELS_DIR = path.join(JINN_HOME, "models", "whisper");
 export const PID_FILE = path.join(JINN_HOME, "gateway.pid");
