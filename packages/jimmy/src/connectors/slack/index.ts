@@ -807,6 +807,13 @@ export class SlackConnector implements Connector {
 
   async sendMessage(target: Target, text: string): Promise<string | undefined> {
     if (!text || !text.trim()) return undefined;
+    // An explicit thread target must never be dropped: posting a "thread
+    // reply" without thread_ts lands it bare in the channel. Callers that
+    // reach sendMessage with a thread (proxy endpoint, MCP tool) get the
+    // same behavior as replyMessage.
+    if (target.thread && target.thread.trim()) {
+      return this.replyMessage(target, text);
+    }
     const chunks = formatResponse(text);
     let lastTs: string | undefined;
     for (const chunk of chunks) {
