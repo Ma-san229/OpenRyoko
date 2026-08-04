@@ -101,11 +101,20 @@ export type JobAttention =
   | { kind: "unnotified"; state: JobState }
   | { kind: "orphaned"; state: JobState };
 
-export function findJobsNeedingAttention(jobsDir: string = JOBS_DIR): JobAttention[] {
+/** An "exited" job younger than this is still inside the monitor's notify
+ *  retry window (~10 min) — its wake-up is coming, don't double-handle it. */
+const EXITED_STALE_MS = 15 * 60 * 1000;
+
+export function findJobsNeedingAttention(jobsDir: string = JOBS_DIR, nowMs: number = Date.now()): JobAttention[] {
   const out: JobAttention[] = [];
   for (const state of listJobStates(jobsDir)) {
-    if (state.status === "exited" || state.status === "notify_failed") {
+    if (state.status === "notify_failed") {
       out.push({ kind: "unnotified", state });
+    } else if (state.status === "exited") {
+      const finished = new Date(state.finishedAt ?? state.startedAt).getTime();
+      if (!Number.isFinite(finished) || nowMs - finished > EXITED_STALE_MS) {
+        out.push({ kind: "unnotified", state });
+      }
     } else if (state.status === "running" && !isPidAlive(state.monitorPid)) {
       out.push({ kind: "orphaned", state });
     }

@@ -63,14 +63,16 @@ describe("job state files", () => {
   });
 
   describe("findJobsNeedingAttention", () => {
-    it("flags exited (finished but agent not woken yet) and notify_failed jobs", () => {
-      writeJobState(makeState({ id: "done", status: "exited", exitCode: 0 }), dir);
+    it("flags notify_failed and STALE exited jobs, not a freshly-exited one (notify retry in flight)", () => {
+      const staleFinish = new Date(Date.now() - 20 * 60_000).toISOString();
+      writeJobState(makeState({ id: "stale", status: "exited", exitCode: 0, finishedAt: staleFinish }), dir);
+      writeJobState(makeState({ id: "fresh", status: "exited", exitCode: 0, finishedAt: new Date().toISOString() }), dir);
       writeJobState(makeState({ id: "lost", status: "notify_failed", exitCode: 1 }), dir);
       writeJobState(makeState({ id: "ok", status: "notified" }), dir);
       const attention = findJobsNeedingAttention(dir);
       expect(attention.map((a) => [a.kind, a.state.id]).sort()).toEqual([
-        ["unnotified", "done"],
         ["unnotified", "lost"],
+        ["unnotified", "stale"],
       ]);
     });
 

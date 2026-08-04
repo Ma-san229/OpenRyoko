@@ -5,6 +5,7 @@ import { JINN_HOME, ORG_DIR, CRON_JOBS, DOCS_DIR } from "../shared/paths.js";
 import { isOperatorSpeaker } from "../shared/operator-match.js";
 import { scanOrg } from "../gateway/org.js";
 import { buildServiceRegistry } from "../gateway/services.js";
+import { findJobsNeedingAttention } from "../jobs/state.js";
 
 /**
  * Token budget strategy:
@@ -148,9 +149,20 @@ export function buildContext(opts: {
   sections.push({
     tier: Tier.ESSENTIAL,
     marker: "## Process lifetime",
-    content: buildProcessLifetimeContext(opts.processLifetime !== "persistent"),
+    content: buildProcessLifetimeContext(opts.processLifetime !== "persistent", opts.sessionId),
     summary: "", // always included
   });
+
+  // ── ESSENTIAL: Detached jobs whose wake-up never arrived ────
+  const jobsCtx = buildDetachedJobsContext();
+  if (jobsCtx) {
+    sections.push({
+      tier: Tier.ESSENTIAL,
+      marker: "## Detached jobs needing attention",
+      content: jobsCtx,
+      summary: "", // always included
+    });
+  }
 
   // ── ESSENTIAL: Configuration awareness ──────────────────────
   if (opts.config) {
@@ -659,13 +671,14 @@ function buildKnowledgeContext(): string | null {
   return lines.join("\n");
 }
 
-function buildProcessLifetimeContext(oneShot: boolean): string {
-  const detachAndVerify = [
-    `- To detach a job so it survives, escape your process group and capture output:`,
-    `  - Linux: \`setsid nohup <cmd> > /tmp/<job>.log 2>&1 &\``,
-    `  - macOS (no \`setsid\`): \`nohup <cmd> > /tmp/<job>.log 2>&1 &\` then \`disown\` (survives normal exit, but not a forced kill of the process group)`,
-    `  - Check \`command -v setsid\` when unsure which applies.`,
-    `- You will NOT be notified when a detached job finishes — you cannot wake yourself up. Either ask the user to check back later, or register a cron job (gateway \`/api/cron\`) to follow up.`,
+function buildProcessLifetimeContext(oneShot: boolean, sessionId?: string): string {
+  const sid = sessionId || "<SESSION_ID from Current session>";
+  const jobRunner = [
+    `- For a job that must outlive the turn, use the self-waking job runner — FIRST choice, do not hand-roll detach + polling:`,
+    `  \`ryoko job run --name <job> --session ${sid} -- '<command>'\``,
+    `  It detaches the job (survives turn end, engine kills and gateway restarts), logs to \`~/.ryoko/jobs/logs/\`, and when the job exits — success OR failure — it wakes THIS session with the exit code and the log tail. Add \`--timeout <sec>\` to bound runaway jobs (you still get woken).`,
+    `- When a job notification wakes you: finish the deferred work (assemble, upload, …) and reply to the ORIGINAL conversation — it is still waiting on you. On failure, recover or tell the user; never leave the thread silent.`,
+    `- Only if \`ryoko job run\` is unavailable, fall back to manual detach (\`setsid nohup <cmd> > /tmp/<job>.log 2>&1 &\` on Linux; \`nohup … &\` + \`disown\` on macOS which has no \`setsid\`) or a cron job (gateway \`/api/cron\`). With manual detach you will NOT be woken when it finishes — you must arrange the follow-up yourself.`,
     `- Verify BEFORE reporting done: read the logfile and check the expected artifact (uploaded file, build output, etc.). If the logfile is missing or incomplete, say so — never claim completion you have not verified.`,
   ];
 
@@ -674,8 +687,8 @@ function buildProcessLifetimeContext(oneShot: boolean): string {
       `## Process lifetime`,
       `This session runs in a persistent interactive process: background tasks survive across turns, but they are killed when the session ends, times out, or the gateway restarts.`,
       ``,
-      `- For a job that must survive session shutdown, detach it (below) instead of relying on a plain background task.`,
-      ...detachAndVerify,
+      `- For a job that must survive session shutdown, prefer the self-waking job runner below over a plain background task.`,
+      ...jobRunner,
     ].join("\n");
   }
 
@@ -685,8 +698,39 @@ function buildProcessLifetimeContext(oneShot: boolean): string {
     ``,
     `- NEVER start a plain background job and reply "I'll report back when it's done" — the job dies the moment your turn ends, and nobody is told. This is different from an interactive CLI, where the CLI outlives the turn.`,
     `- If a job fits within this turn, run it in the FOREGROUND and wait for it to finish before answering.`,
-    ...detachAndVerify,
+    ...jobRunner,
   ].join("\n");
+}
+
+/**
+ * Detached jobs whose wake-up never arrived: the notification failed after
+ * retries (gateway was down) or the monitor died (reboot, kill -9). Surfacing
+ * them here guarantees "the next turn detects it" — a finished job can be
+ * delayed, but never silently lost (issue #38 follow-up).
+ */
+function buildDetachedJobsContext(): string | null {
+  let attention: import("../jobs/state.js").JobAttention[];
+  try {
+    attention = findJobsNeedingAttention();
+  } catch {
+    return null;
+  }
+  if (attention.length === 0) return null;
+
+  const lines = [
+    `## Detached jobs needing attention`,
+    `These detached jobs finished (or their monitor died) but their wake-up notification never reached a session. Handle them FIRST — the conversation that started them may still be waiting:`,
+  ];
+  for (const { kind, state } of attention) {
+    const outcome = kind === "orphaned"
+      ? "monitor died while running"
+      : state.timedOut
+        ? `timed out after ${state.timeoutSec}s`
+        : `exit ${state.exitCode ?? "?"}`;
+    lines.push(`- \`${state.id}\` (${state.name}) — ${outcome}; log: \`${state.logFile}\`; session: ${state.sessionId}`);
+  }
+  lines.push(`Read each log, complete or recover the deferred work, then delete the state file under \`~/.ryoko/jobs/\` so this list clears.`);
+  return lines.join("\n");
 }
 
 function buildConnectorContext(connectors: string[], gatewayUrl: string, portalName: string): string {

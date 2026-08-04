@@ -30,16 +30,26 @@ describe("buildContext — process lifetime section", () => {
     expect(ctx).toContain("Your process is one-shot");
   });
 
-  it("gives OS-specific detach commands (setsid is Linux-only)", () => {
+  it("presents the self-waking job runner as first choice, with the real session id", () => {
+    const ctx = buildContext({ ...baseOpts, sessionId: "sess-abc-123" });
+    expect(ctx).toContain("self-waking job runner — FIRST choice");
+    expect(ctx).toContain("ryoko job run --name <job> --session sess-abc-123 -- '<command>'");
+    expect(ctx).toContain("success OR failure — it wakes THIS session");
+  });
+
+  it("tells the woken turn to finish the deferred work and reply to the original conversation", () => {
     const ctx = buildContext(baseOpts);
+    expect(ctx).toContain("reply to the ORIGINAL conversation");
+    expect(ctx).toContain("never leave the thread silent");
+  });
+
+  it("keeps manual detach only as fallback, with OS-specific commands and no-wake warning", () => {
+    const ctx = buildContext(baseOpts);
+    expect(ctx).toContain("Only if `ryoko job run` is unavailable");
     expect(ctx).toContain("setsid nohup");
     expect(ctx).toMatch(/macOS/);
     expect(ctx).toMatch(/disown/);
-  });
-
-  it("says the agent cannot be woken up and must verify before reporting done", () => {
-    const ctx = buildContext(baseOpts);
-    expect(ctx).toContain("You will NOT be notified");
+    expect(ctx).toContain("you will NOT be woken");
     expect(ctx).toMatch(/never claim completion you have not verified/i);
   });
 
@@ -48,8 +58,8 @@ describe("buildContext — process lifetime section", () => {
     expect(ctx).not.toContain("Your process is one-shot");
     expect(ctx).toContain("## Process lifetime");
     expect(ctx).toContain("persistent interactive process");
-    // Detach guidance still applies: the PTY dies with the session/gateway.
-    expect(ctx).toContain("setsid nohup");
+    // The runner is still first choice: the PTY dies with the session/gateway.
+    expect(ctx).toContain("self-waking job runner");
   });
 
   it("is essential tier: full content survives trimming that summarizes standard sections", () => {
