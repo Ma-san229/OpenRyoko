@@ -181,6 +181,65 @@ program
     });
 }
 
+// 切り離しジョブ（ryoko job run / list — 完了時にセッションを自動起床）
+{
+  const jobCmd = program
+    .command("job")
+    .description("切り離しバックグラウンドジョブ（完了時に元セッションを自動起床）");
+
+  jobCmd
+    .command("run")
+    .description("コマンドを切り離して実行し、終了時（成功/失敗とも）にセッションへ通知する")
+    .requiredOption("--name <name>", "ジョブ名（通知・ログの識別子）")
+    .requiredOption("--session <id>", "終了時に起こすセッションID")
+    .option("--timeout <sec>", "この秒数を超えたらジョブをkillして失敗通知する")
+    .option("--log <path>", "ログファイルのパス（省略時は ~/.ryoko/jobs/logs/<id>.log）")
+    .option("--gateway <url>", "gateway URL（loopbackのみ許可。省略時はconfigのポート）")
+    .argument("<command...>", "実行するシェルコマンド（-- の後に書く）")
+    .action(async (commandParts: string[], opts: { name: string; session: string; timeout?: string; log?: string; gateway?: string }) => {
+      const { launchDetachedJob } = await import("../src/jobs/run.js");
+      const state = launchDetachedJob({
+        name: opts.name,
+        sessionId: opts.session,
+        command: commandParts.join(" "),
+        gatewayUrl: opts.gateway,
+        logFile: opts.log,
+        timeoutSec: opts.timeout ? parseInt(opts.timeout, 10) : undefined,
+      });
+      console.log(`Detached job started: ${state.id}`);
+      console.log(`  log:     ${state.logFile}`);
+      console.log(`  monitor: pid ${state.monitorPid}`);
+      console.log(`  wakes:   session ${state.sessionId} on exit (success or failure)`);
+      console.log(`This turn can end now — the job survives it and will wake the session when done.`);
+    });
+
+  jobCmd
+    .command("list")
+    .description("ジョブの状態を一覧表示する")
+    .action(async () => {
+      const { listJobStates, isPidAlive } = await import("../src/jobs/state.js");
+      const states = listJobStates();
+      if (states.length === 0) {
+        console.log("No jobs.");
+        return;
+      }
+      for (const s of states) {
+        const orphaned = s.status === "running" && !isPidAlive(s.monitorPid) ? " (ORPHANED — monitor dead)" : "";
+        const exit = s.exitCode !== undefined && s.exitCode !== null ? ` exit=${s.exitCode}` : s.timedOut ? " timed-out" : "";
+        console.log(`${s.id}  [${s.status}${orphaned}]${exit}  session=${s.sessionId}  log=${s.logFile}`);
+      }
+    });
+
+  jobCmd
+    .command("_monitor <id>", { hidden: true })
+    .description("内部用: 切り離しモニタープロセスの本体")
+    .option("--jobs-dir <dir>")
+    .action(async (id: string, opts: { jobsDir?: string }) => {
+      const { runJobMonitor } = await import("../src/jobs/monitor.js");
+      await runJobMonitor(id, { jobsDir: opts.jobsDir });
+    });
+}
+
 program
   .command("chrome-allow")
   .description("Claude Chrome拡張で全サイトを事前承認する")
