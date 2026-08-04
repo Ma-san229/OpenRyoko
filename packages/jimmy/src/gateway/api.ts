@@ -29,7 +29,7 @@ import {
   getFile,
 } from "../sessions/registry.js";
 import { forkEngineSession } from "../sessions/fork.js";
-import { deliverToOriginConnector } from "../sessions/origin-delivery.js";
+import { deliverToOriginConnector, isUndeliveredToOrigin, recordFailedOriginDelivery } from "../sessions/origin-delivery.js";
 import {
   CONFIG_PATH,
   CRON_JOBS,
@@ -186,25 +186,6 @@ function maybeRevertEngineOverride(session: Session): Session {
     transportMeta: nextMeta as any,
     lastError: null,
   }) ?? session;
-}
-
-/**
- * A woken turn computed its reply but the connector rejected every attempt.
- * The customer conversation has NOT seen the answer — persist that fact into
- * the session (message + lastError) so the next turn (or the operator) sees
- * it instead of the failure vanishing into a log line.
- */
-function recordFailedOriginDelivery(session: Session, context: ApiContext): void {
-  const note =
-    `⚠️ Your reply above was NOT delivered to the original conversation (connector "${session.connector}" failed or the reply target is unreachable). ` +
-    `The customer has not seen it — repost it (send_message / reply) as soon as the connector recovers.`;
-  try {
-    insertMessage(session.id, "notification", note);
-    updateSession(session.id, { lastError: "origin delivery failed — reply not posted to the original conversation" });
-    context.emit("session:notification", { sessionId: session.id, message: note });
-  } catch (err) {
-    logger.error(`Failed to record origin-delivery failure for session ${session.id}: ${err instanceof Error ? err.message : String(err)}`);
-  }
 }
 
 // In-memory idempotency keys for notification wake-ups. The persisted-message
@@ -2575,7 +2556,7 @@ async function runWebSession(
             notifyParentSession(completedFallback, { result: fallbackResult.result, error: fallbackResult.error ?? null, cost: fallbackResult.cost, durationMs: fallbackResult.durationMs }, { alwaysNotify: employee?.alwaysNotify });
             if (deliverToConnector && fallbackResult.result && !fallbackResult.error) {
               const delivery = await deliverToOriginConnector(completedFallback, fallbackResult.result, context.connectors);
-              if (delivery === "failed" || (delivery === "no_target" && completedFallback.connector)) recordFailedOriginDelivery(completedFallback, context);
+              if (isUndeliveredToOrigin(delivery, completedFallback)) recordFailedOriginDelivery(completedFallback, context.emit);
             }
           }
 
@@ -2731,7 +2712,7 @@ async function runWebSession(
             notifyParentSession(completedAfterRetry, { result: retryResult.result, error: retryResult.error ?? null, cost: retryResult.cost, durationMs: retryResult.durationMs }, { alwaysNotify: employee?.alwaysNotify });
             if (deliverToConnector && retryResult.result && !retryResult.error) {
               const delivery = await deliverToOriginConnector(completedAfterRetry, retryResult.result, context.connectors);
-              if (delivery === "failed" || (delivery === "no_target" && completedAfterRetry.connector)) recordFailedOriginDelivery(completedAfterRetry, context);
+              if (isUndeliveredToOrigin(delivery, completedAfterRetry)) recordFailedOriginDelivery(completedAfterRetry, context.emit);
             }
           }
 
@@ -2797,7 +2778,7 @@ async function runWebSession(
       notifyParentSession(completedSession, { result: result.result, error: result.error ?? null, cost: result.cost, durationMs: result.durationMs }, { alwaysNotify: employee?.alwaysNotify });
       if (deliverToConnector && result.result && !result.error) {
         const delivery = await deliverToOriginConnector(completedSession, result.result, context.connectors);
-        if (delivery === "failed" || (delivery === "no_target" && completedSession.connector)) recordFailedOriginDelivery(completedSession, context);
+        if (isUndeliveredToOrigin(delivery, completedSession)) recordFailedOriginDelivery(completedSession, context.emit);
       }
     }
 

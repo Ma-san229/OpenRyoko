@@ -22,7 +22,7 @@ import {
 import { notifyParentSession, notifyRateLimited, notifyRateLimitResumed, notifyDiscordChannel } from "./callbacks.js";
 import { buildContext } from "./context.js";
 import { normalizeDelivery, normalizeTurns, deliverPublic, type DeliveryContext } from "./reply-disposition.js";
-import { deliverToOriginConnector } from "./origin-delivery.js";
+import { deliverToOriginConnector, isUndeliveredToOrigin, recordFailedOriginDelivery } from "./origin-delivery.js";
 import { SessionQueue } from "./queue.js";
 import { JINN_HOME } from "../shared/paths.js";
 import { logger } from "../shared/logger.js";
@@ -334,7 +334,10 @@ export class SessionManager {
 
       logger.info(`Delivering background completion for session ${sessionId} (${text.length} chars)`);
 
-      await deliverToOriginConnector(session, text, this.connectorProvider());
+      const delivery = await deliverToOriginConnector(updated, text, this.connectorProvider());
+      if (isUndeliveredToOrigin(delivery, updated)) {
+        recordFailedOriginDelivery(updated);
+      }
 
       // Child (sub-)session: this late completion IS the "完了通知" the parent
       // was waiting for.

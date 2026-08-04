@@ -1,5 +1,6 @@
 import type { Connector, Session } from "../shared/types.js";
 import { normalizeDelivery, deliverPublic, type DeliveryContext } from "./reply-disposition.js";
+import { insertMessage, updateSession } from "./registry.js";
 import { logger } from "../shared/logger.js";
 
 /**
@@ -70,4 +71,31 @@ export async function deliverToOriginConnector(
   }
   logger.warn(`Origin-connector delivery failed for session ${session.id}: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}`);
   return "failed";
+}
+
+/** True when this delivery outcome means a connector-origin conversation was
+ *  left without its answer and the caller must persist that fact. */
+export function isUndeliveredToOrigin(result: OriginDeliveryResult, session: Session): boolean {
+  return result === "failed" || (result === "no_target" && !!session.connector);
+}
+
+/**
+ * A turn computed its reply but it never reached the origin conversation.
+ * Persist that fact into the session (message + lastError) so the next turn
+ * (or the operator) sees it instead of the failure vanishing into a log line.
+ */
+export function recordFailedOriginDelivery(
+  session: Session,
+  emit?: (event: string, payload: unknown) => void,
+): void {
+  const note =
+    `⚠️ Your reply above was NOT delivered to the original conversation (connector "${session.connector}" failed or the reply target is unreachable). ` +
+    `The customer has not seen it — repost it (send_message / reply) as soon as the connector recovers.`;
+  try {
+    insertMessage(session.id, "notification", note);
+    updateSession(session.id, { lastError: "origin delivery failed — reply not posted to the original conversation" });
+    emit?.("session:notification", { sessionId: session.id, message: note });
+  } catch (err) {
+    logger.error(`Failed to record origin-delivery failure for session ${session.id}: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
