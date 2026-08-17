@@ -57,6 +57,15 @@ program
   });
 
 program
+  .command("pair")
+  .description("リモートブラウザ用の単回ペアリングコードを発行する")
+  .option("--json", "JSON形式で出力")
+  .action(async (opts: { json?: boolean }) => {
+    const { runPair } = await import("../src/cli/pair.js");
+    await runPair(opts);
+  });
+
+program
   .command("create <name>")
   .description("新しいOpenRyokoインスタンスを作成する")
   .option("-p, --port <port>", "ゲートウェイのポート（省略時は自動割当）")

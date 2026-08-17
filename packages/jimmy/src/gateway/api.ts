@@ -27,6 +27,11 @@ import {
   cancelAllPendingQueueItems,
   listAllPendingQueueItems,
   getFile,
+  getMessagePage,
+  getMessageWindow,
+  isFtsBackfillPending,
+  listSessionPage,
+  searchMessages,
 } from "../sessions/registry.js";
 import { forkEngineSession } from "../sessions/fork.js";
 import { deliverToOriginConnector, isUndeliveredToOrigin, recordFailedOriginDelivery } from "../sessions/origin-delivery.js";
@@ -57,9 +62,28 @@ import { WhatsAppConnector } from "../connectors/whatsapp/index.js";
 import { handleFilesRequest, ensureFilesDir } from "./files.js";
 import { notifyParentSession, notifyRateLimited, notifyRateLimitResumed, notifyDiscordChannel } from "../sessions/callbacks.js";
 import { loadInstances } from "../cli/instances.js";
+import { recordTurnAccounting } from "../sessions/accounting.js";
+import { messageText } from "./message-body.js";
+import { decodeSessionCursor, encodeSessionCursor } from "./pagination.js";
+import {
+  authCookieHeaders,
+  clearAuthCookieHeaders,
+  consumePairingCode,
+  createAuthSession,
+  currentDeviceId,
+  issuePairingCode,
+  listAuthSessions,
+  revokeAuthSession,
+  shouldRequireGatewayAuth,
+  verifyGatewayAuth,
+} from "./auth.js";
+import { getDiskSpaceStatus } from "../shared/storage-health.js";
+import { ptySnapshotStore } from "../engines/pty-snapshot.js";
+import { collectClaudeUsage } from "../shared/claude-usage.js";
 
 /** Max bytes accepted on /api/internal/hook (loopback-only relay payloads are tiny). */
 const HOOK_BODY_MAX_BYTES = 64 * 1024;
+const PAIR_BODY_MAX_BYTES = 1024;
 
 export interface ApiContext {
   config: JinnConfig;
@@ -97,6 +121,8 @@ export interface ApiContext {
    */
   hookRegistry?: import("./hook-registry.js").HookRegistry;
   hookSecret?: string;
+  authToken?: string;
+  authHome?: string;
 }
 
 export function resumePendingWebQueueItems(context: ApiContext): void {
@@ -241,10 +267,9 @@ function dispatchWebSessionRun(
   }
 }
 
-/** Read a request body but abort once it exceeds `maxBytes` — guards loopback-only
- *  endpoints (e.g. /api/internal/hook) against unbounded buffering when no (or a
- *  lying) Content-Length is sent. Resolves `{ ok:false }` after destroying the
- *  socket; the caller must already have sent no response. */
+/** Read a request body but stop buffering once it exceeds `maxBytes`. The stream
+ *  is drained without retaining further chunks so the caller can still return a
+ *  deterministic 413 response on the existing HTTP connection. */
 function readBodyBounded(req: HttpRequest, maxBytes: number): Promise<{ ok: true; raw: string } | { ok: false }> {
   return new Promise((resolve) => {
     const chunks: Buffer[] = [];
@@ -256,9 +281,10 @@ function readBodyBounded(req: HttpRequest, maxBytes: number): Promise<{ ok: true
       resolve(r);
     };
     req.on("data", (chunk: Buffer) => {
+      if (done) return;
       total += chunk.length;
       if (total > maxBytes) {
-        try { req.destroy(); } catch { /* already gone */ }
+        chunks.length = 0;
         finish({ ok: false });
         return;
       }
@@ -287,8 +313,19 @@ function readBodyRaw(req: HttpRequest): Promise<Buffer> {
   });
 }
 
-async function readJsonBody(req: HttpRequest, res: ServerResponse): Promise<{ ok: true; body: unknown } | { ok: false }> {
-  const raw = await readBody(req);
+async function readJsonBody(req: HttpRequest, res: ServerResponse, maxBytes?: number): Promise<{ ok: true; body: unknown } | { ok: false }> {
+  const contentLength = Number(req.headers["content-length"] ?? NaN);
+  if (maxBytes !== undefined && Number.isFinite(contentLength) && contentLength > maxBytes) {
+    req.resume();
+    json(res, { error: "Payload too large" }, 413);
+    return { ok: false };
+  }
+  const bounded = maxBytes === undefined ? undefined : await readBodyBounded(req, maxBytes);
+  if (bounded && !bounded.ok) {
+    json(res, { error: "Payload too large" }, 413);
+    return { ok: false };
+  }
+  const raw = bounded?.ok ? bounded.raw : await readBody(req);
   try {
     return { ok: true, body: JSON.parse(raw) };
   } catch {
@@ -346,6 +383,12 @@ export function deepMerge(target: Record<string, unknown>, source: Record<string
     const tv = target[key];
     // Skip sanitized secret placeholders — keep original value
     if (SANITIZED_KEYS.has(key) && sv === "***") continue;
+    // JSON cannot carry `undefined`. An explicit null removes an optional
+    // override, allowing clients to restore inherited/default behavior.
+    if (sv === null) {
+      delete result[key];
+      continue;
+    }
     if (Array.isArray(sv)) {
       // For arrays (e.g. instances), preserve secrets from matching items
       if (Array.isArray(tv)) {
@@ -497,19 +540,96 @@ export async function handleApiRequest(
         },
         sessions: { total: sessions.length, running, active: running },
         connectors,
+        storage: getDiskSpaceStatus(),
       });
+    }
+
+    // Live Claude subscription buckets, including model-scoped weekly limits.
+    // The collector returns only a fixed projection; OAuth credentials and raw
+    // provider failures never cross the gateway boundary.
+    if (method === "GET" && pathname === "/api/usage/claude") {
+      return json(res, await collectClaudeUsage());
+    }
+
+    // Browser/device authentication. The state and redemption routes are the
+    // only public auth endpoints; code creation and device management pass
+    // through the gateway auth middleware (or Bearer token) in server.ts.
+    if (method === "GET" && pathname === "/api/auth/state") {
+      const authRequired = shouldRequireGatewayAuth(context.getConfig());
+      const authenticated = Boolean(
+        context.authToken && context.authHome && verifyGatewayAuth(req.headers, context.authToken, context.authHome),
+      );
+      return json(res, {
+        authRequired,
+        authenticated,
+        networkExposed: context.getConfig().gateway.host !== "127.0.0.1" && context.getConfig().gateway.host !== "localhost",
+      });
+    }
+
+    if (method === "POST" && pathname === "/api/auth/pairing-codes") {
+      if (!context.authHome) return json(res, { error: "Auth is not configured" }, 503);
+      return json(res, { ...issuePairingCode(context.authHome), ttlSeconds: 300 });
+    }
+
+    if (method === "POST" && pathname === "/api/auth/pair") {
+      if (!context.authHome) return json(res, { error: "Auth is not configured" }, 503);
+      const parsed = await readJsonBody(req, res, PAIR_BODY_MAX_BYTES);
+      if (!parsed.ok) return;
+      const code = (parsed.body as { code?: unknown }).code;
+      if (typeof code !== "string" || !consumePairingCode(context.authHome, code)) {
+        return json(res, { error: "Invalid or expired pairing code" }, 401);
+      }
+      const session = createAuthSession(context.authHome, req);
+      const forwardedProto = Array.isArray(req.headers["x-forwarded-proto"])
+        ? req.headers["x-forwarded-proto"][0]
+        : req.headers["x-forwarded-proto"];
+      const secure = forwardedProto?.split(",", 1)[0]?.trim().toLowerCase() === "https";
+      res.setHeader("Set-Cookie", authCookieHeaders(session.secret, session.id, context.authHome, secure));
+      return json(res, { status: "ok" });
+    }
+
+    if (method === "POST" && pathname === "/api/auth/logout") {
+      if (context.authHome) {
+        const id = currentDeviceId(req.headers, context.authHome);
+        if (id) revokeAuthSession(context.authHome, id);
+      }
+      res.setHeader("Set-Cookie", clearAuthCookieHeaders(context.authHome ?? JINN_HOME));
+      return json(res, { status: "ok" });
+    }
+
+    if (method === "GET" && pathname === "/api/auth/devices") {
+      if (!context.authHome) return json(res, { devices: [] });
+      return json(res, { devices: listAuthSessions(context.authHome, currentDeviceId(req.headers, context.authHome)) });
+    }
+
+    let authParams = matchRoute("/api/auth/devices/:id", pathname);
+    if (method === "DELETE" && authParams) {
+      if (!context.authHome) return json(res, { error: "Auth is not configured" }, 503);
+      const current = currentDeviceId(req.headers, context.authHome) === authParams.id;
+      if (!revokeAuthSession(context.authHome, authParams.id)) return notFound(res);
+      if (current) res.setHeader("Set-Cookie", clearAuthCookieHeaders(context.authHome));
+      return json(res, { status: "ok", current });
     }
 
     // GET /api/instances
     if (method === "GET" && pathname === "/api/instances") {
       const instances = loadInstances();
       const currentPort = context.getConfig().gateway.port || 7777;
+      const forwardedProto = Array.isArray(req.headers["x-forwarded-proto"])
+        ? req.headers["x-forwarded-proto"][0]
+        : req.headers["x-forwarded-proto"];
+      const protocol = forwardedProto?.split(",", 1)[0]?.trim() === "https" ? "https" : "http";
+      let requestHostname = "localhost";
+      try { requestHostname = new URL(`${protocol}://${req.headers.host || "localhost"}`).hostname; } catch { /* fallback */ }
+      const urlHost = requestHostname.includes(":") ? `[${requestHostname}]` : requestHostname;
       const results = await Promise.all(
         instances.map(async (inst) => ({
           name: inst.name,
+          displayName: inst.name.split("-").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" "),
           port: inst.port,
           running: inst.port === currentPort ? true : await checkInstanceHealth(inst.port),
           current: inst.port === currentPort,
+          switchUrl: `${protocol}://${urlHost}:${inst.port}/chat`,
         }))
       );
       return json(res, results);
@@ -517,8 +637,35 @@ export async function handleApiRequest(
 
     // GET /api/sessions
     if (method === "GET" && pathname === "/api/sessions") {
+      if (url.searchParams.has("limit") || url.searchParams.has("cursor")) {
+        let cursor;
+        try { cursor = decodeSessionCursor(url.searchParams.get("cursor")); }
+        catch (err) { return badRequest(res, err instanceof Error ? err.message : String(err)); }
+        const limit = Math.max(1, Math.min(parseInt(url.searchParams.get("limit") || "100", 10) || 100, 200));
+        const page = listSessionPage(limit, cursor);
+        return json(res, {
+          sessions: page.sessions.map((session) => serializeSession(session, context)),
+          nextCursor: encodeSessionCursor(page.nextCursor),
+        });
+      }
       const sessions = listSessions();
       return json(res, sessions.map((session) => serializeSession(session, context)));
+    }
+
+    // GET /api/search/messages?q=... — FTS5 over user/assistant history.
+    if (method === "GET" && pathname === "/api/search/messages") {
+      const query = (url.searchParams.get("q") || "").replace(/[\u0000-\u001f\u007f]/g, " ").trim();
+      if (!query) return badRequest(res, "q is required");
+      if (query.length > 500) return badRequest(res, "q is too long (max 500 characters)");
+      const role = url.searchParams.get("role");
+      if (role && role !== "user" && role !== "assistant") return badRequest(res, 'role must be "user" or "assistant"');
+      const results = searchMessages(query, parseInt(url.searchParams.get("limit") || "20", 10), {
+        sessionId: url.searchParams.get("sessionId") || undefined,
+        employee: url.searchParams.get("employee") || undefined,
+        engine: url.searchParams.get("engine") || undefined,
+        role: role as "user" | "assistant" | undefined,
+      });
+      return json(res, { query, results, indexing: isFtsBackfillPending() });
     }
 
     // GET /api/sessions/interrupted — list sessions that can be resumed after a restart
@@ -533,26 +680,38 @@ export async function handleApiRequest(
     if (method === "GET" && params) {
       const session = getSession(params.id);
       if (!session) return notFound(res);
-      let messages = getMessages(params.id);
+      const includeMessages = url.searchParams.get("messages") !== "0";
+      const lastN = Math.max(0, Math.min(parseInt(url.searchParams.get("last") || "0", 10) || 0, 200));
+      let messagePage = includeMessages && lastN > 0 ? getMessagePage(params.id, { limit: lastN }) : null;
+      let messages = includeMessages ? (messagePage?.messages ?? getMessages(params.id)) : [];
 
       // Backfill from Claude Code's JSONL transcript if our DB has no messages
-      if (messages.length === 0 && session.engineSessionId) {
+      if (includeMessages && messages.length === 0 && session.engineSessionId) {
         const transcriptMessages = loadTranscriptMessages(session.engineSessionId);
         if (transcriptMessages.length > 0) {
           for (const tm of transcriptMessages) {
             insertMessage(params.id, tm.role, tm.content);
           }
-          messages = getMessages(params.id);
+          messagePage = lastN > 0 ? getMessagePage(params.id, { limit: lastN }) : null;
+          messages = messagePage?.messages ?? getMessages(params.id);
         }
       }
 
-      // Support ?last=N to return only the N most recent messages
-      const lastN = parseInt(url.searchParams.get("last") || "0", 10);
-      if (lastN > 0 && messages.length > lastN) {
-        messages = messages.slice(-lastN);
-      }
+      return json(res, {
+        ...serializeSession(session, context),
+        ...(includeMessages ? { messages } : {}),
+        ...(messagePage ? { messagesPage: { hasOlder: messagePage.hasOlder } } : {}),
+      });
+    }
 
-      return json(res, { ...serializeSession(session, context), messages });
+    // GET /api/sessions/:id/messages?before=<messageId>&limit=N
+    params = matchRoute("/api/sessions/:id/messages", pathname);
+    if (method === "GET" && params) {
+      if (!getSession(params.id)) return notFound(res);
+      const limit = Math.max(1, Math.min(parseInt(url.searchParams.get("limit") || "100", 10) || 100, 200));
+      const around = url.searchParams.get("around");
+      if (around) return json(res, getMessageWindow(params.id, around, Math.min(limit, 100)));
+      return json(res, getMessagePage(params.id, { before: url.searchParams.get("before") || undefined, limit }));
     }
 
     // PUT /api/sessions/:id
@@ -593,6 +752,7 @@ export async function handleApiRequest(
 
       const deleted = deleteSession(params.id);
       if (!deleted) return notFound(res);
+      ptySnapshotStore.deleteSync(params.id);
       logger.info(`Session deleted: ${params.id}`);
       context.emit("session:deleted", { sessionId: params.id });
       return json(res, { status: "deleted" });
@@ -633,6 +793,7 @@ export async function handleApiRequest(
         lastError: null,
         transportMeta: meta as any,
       });
+      ptySnapshotStore.deleteSync(params.id);
       logger.info(`Session ${params.id} reset via API (cleared engineSessions, engineOverride, engineSessionId, lastError)`);
       context.emit("session:updated", { sessionId: params.id });
       return json(res, { status: "reset", sessionId: params.id });
@@ -756,6 +917,7 @@ export async function handleApiRequest(
 
       const count = deleteSessions(ids);
       for (const id of ids) {
+        ptySnapshotStore.deleteSync(id);
         context.emit("session:deleted", { sessionId: id });
       }
       logger.info(`Bulk deleted ${count} sessions`);
@@ -812,8 +974,8 @@ export async function handleApiRequest(
       if (!_parsed.ok) return;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const body = _parsed.body as any;
-      const prompt = body.prompt || body.message;
-      if (!prompt) return badRequest(res, "prompt or message is required");
+      const prompt = messageText(body, ["prompt", "message"]);
+      if (!prompt) return badRequest(res, "prompt or message must be a non-empty string");
       const config = context.getConfig();
       const engineName = body.engine || config.engines.default;
       const sessionKey = `web:${Date.now()}`;
@@ -873,8 +1035,8 @@ export async function handleApiRequest(
       if (!_parsed.ok) return;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const body = _parsed.body as any;
-      const prompt = body.message || body.prompt;
-      if (!prompt) return badRequest(res, "message is required");
+      const prompt = messageText(body, ["message", "prompt"]);
+      if (!prompt) return badRequest(res, "message must be a non-empty string");
 
       // Allow internal callers (e.g. child session callbacks) to specify a non-user role
       const messageRole: string = body.role === "notification" ? "notification" : "user";
@@ -2116,6 +2278,7 @@ Handle this as a priority request from a colleague.`;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error(`API error: ${msg}`);
+    if (msg.startsWith("Insufficient disk space")) return json(res, { error: msg }, 507);
     return serverError(res, msg);
   }
 }
@@ -2437,7 +2600,6 @@ async function runWebSession(
     }).finally(() => {
       clearInterval(runHeartbeat);
     });
-
     if (!getSession(currentSession.id)) {
       logger.info(`Skipping completion for deleted web session ${currentSession.id}`);
       return;
@@ -2531,6 +2693,7 @@ async function runWebSession(
               });
             },
           });
+          recordTurnAccounting(currentSession.id, fallbackResult);
 
           if (fallbackResult.result) {
             insertMessage(currentSession.id, "assistant", fallbackResult.result);
@@ -2668,7 +2831,6 @@ async function runWebSession(
               });
             },
           });
-
           const retryInterrupted = retryResult.error?.startsWith("Interrupted");
           const retryRateLimit = !retryInterrupted ? detectRateLimit(retryResult) : { limited: false as const };
 
@@ -2692,6 +2854,7 @@ async function runWebSession(
           }
 
           // Usage limit cleared — handle result
+          recordTurnAccounting(currentSession.id, retryResult);
           if (retryResult.result) {
             insertMessage(currentSession.id, "assistant", retryResult.result);
           }
@@ -2759,6 +2922,7 @@ async function runWebSession(
       insertMessage(currentSession.id, "assistant", result.result);
     }
 
+    recordTurnAccounting(currentSession.id, result);
     const completedSession = updateSession(currentSession.id, {
       ...(result.sessionId?.trim() ? { engineSessionId: result.sessionId } : {}),
       status: result.error ? "error" : "idle",

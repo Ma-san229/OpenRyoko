@@ -10,13 +10,14 @@ import { THEMES } from "@/lib/themes"
 import type { ThemeId } from "@/lib/themes"
 import { api } from "@/lib/api"
 import { EmojiPicker } from "@/components/ui/emoji-picker"
+import { ModelSelector } from "@/components/settings/model-selector"
 import {
-  CLAUDE_MODELS,
-  OPENAI_MODELS,
-  DEFAULT_CLAUDE_MODEL,
-  DEFAULT_CODEX_MODEL,
-  modelsForEngine,
-  withCurrentValue,
+  MODEL_VENDORS,
+  TRIAGE_MODEL_VENDORS,
+  defaultModelForEngine,
+  defaultTriageModelForEngine,
+  type SupportedModelEngine,
+  type TriageModelEngine,
 } from "@/lib/model-catalog"
 
 // ---------------------------------------------------------------------------
@@ -134,9 +135,10 @@ function buildSlackManifest(botName?: string | null): string {
 interface Config {
   gateway?: { port?: number; host?: string }
   engines?: {
-    default?: string
+    default?: SupportedModelEngine
     claude?: { bin?: string; model?: string; effortLevel?: string; interactive?: boolean }
     codex?: { bin?: string; model?: string; effortLevel?: string }
+    gemini?: { bin?: string; model?: string; effortLevel?: string }
   }
   sessions?: {
     maxDurationMinutes?: number
@@ -256,9 +258,11 @@ function Section({
 
 function FieldRow({
   label,
+  htmlFor,
   children,
 }: {
   label: string
+  htmlFor?: string
   children: React.ReactNode
 }) {
   return (
@@ -266,6 +270,7 @@ function FieldRow({
       className="flex items-center justify-between py-[var(--space-2)] gap-[var(--space-4)]"
     >
       <label
+        htmlFor={htmlFor}
         className="text-[length:var(--text-subheadline)] text-[var(--text-secondary)] shrink-0"
       >
         {label}
@@ -298,16 +303,19 @@ function SettingsInput({
 }
 
 function SettingsSelect({
+  id,
   value,
   onChange,
   options,
 }: {
+  id?: string
   value: string
   onChange: (v: string) => void
   options: { value: string; label: string }[]
 }) {
   return (
     <select
+      id={id}
       value={value}
       onChange={(e) => onChange(e.target.value)}
       className="w-full bg-[var(--bg-secondary)] border border-[var(--separator)] rounded-[var(--radius-sm)] px-[10px] py-[6px] text-[length:var(--text-footnote)] text-[var(--text-primary)] cursor-pointer"
@@ -833,6 +841,13 @@ export default function SettingsPage() {
       .finally(() => setSaving(false))
   }
 
+  const defaultModelEngine: SupportedModelEngine =
+    config.engines?.default === "codex"
+      ? "codex"
+      : config.engines?.default === "gemini"
+        ? "gemini"
+        : "claude"
+
   return (
     <PageLayout>
       <div
@@ -1176,14 +1191,43 @@ export default function SettingsPage() {
                     placeholder="127.0.0.1"
                   />
                 </FieldRow>
-                <FieldRow label="Default Engine">
+                <FieldRow label="既定モデルのベンダー" htmlFor="default-model-vendor">
                   <SettingsSelect
-                    value={config.engines?.default ?? "claude"}
-                    onChange={(v) => updateConfig(["engines", "default"], v)}
-                    options={[
-                      { value: "claude", label: "Claude" },
-                      { value: "codex", label: "Codex" },
-                    ]}
+                    id="default-model-vendor"
+                    value={defaultModelEngine}
+                    onChange={(v) => {
+                      const engine = v as SupportedModelEngine
+                      updateConfig(
+                        ["engines", "default"],
+                        engine,
+                      )
+                      if (!config.engines?.[engine]?.model) {
+                        updateConfig(
+                          ["engines", engine, "model"],
+                          defaultModelForEngine(engine),
+                        )
+                      }
+                      if (engine === "gemini" && !config.engines?.gemini?.bin) {
+                        updateConfig(["engines", "gemini", "bin"], "gemini")
+                      }
+                    }}
+                    options={MODEL_VENDORS}
+                  />
+                </FieldRow>
+                <FieldRow label="既定モデル" htmlFor="default-model">
+                  <ModelSelector
+                    id="default-model"
+                    engine={defaultModelEngine}
+                    model={
+                      config.engines?.[defaultModelEngine]?.model ??
+                      defaultModelForEngine(defaultModelEngine)
+                    }
+                    onChange={(v) =>
+                      updateConfig(
+                        ["engines", defaultModelEngine, "model"],
+                        v ?? defaultModelForEngine(defaultModelEngine),
+                      )
+                    }
                   />
                 </FieldRow>
               </Section>
@@ -1204,13 +1248,19 @@ export default function SettingsPage() {
                     placeholder="claude"
                   />
                 </FieldRow>
-                <FieldRow label="Model">
-                  <SettingsSelect
-                    value={config.engines?.claude?.model ?? DEFAULT_CLAUDE_MODEL}
-                    onChange={(v) =>
-                      updateConfig(["engines", "claude", "model"], v)
+                <FieldRow label="Model" htmlFor="claude-engine-model">
+                  <ModelSelector
+                    id="claude-engine-model"
+                    engine="claude"
+                    model={
+                      config.engines?.claude?.model ?? defaultModelForEngine("claude")
                     }
-                    options={withCurrentValue(CLAUDE_MODELS, config.engines?.claude?.model)}
+                    onChange={(v) =>
+                      updateConfig(
+                        ["engines", "claude", "model"],
+                        v ?? defaultModelForEngine("claude"),
+                      )
+                    }
                   />
                 </FieldRow>
                 <FieldRow label="Effort Level">
@@ -1263,13 +1313,19 @@ export default function SettingsPage() {
                     placeholder="codex"
                   />
                 </FieldRow>
-                <FieldRow label="Model">
-                  <SettingsSelect
-                    value={config.engines?.codex?.model ?? DEFAULT_CODEX_MODEL}
-                    onChange={(v) =>
-                      updateConfig(["engines", "codex", "model"], v)
+                <FieldRow label="Model" htmlFor="codex-engine-model">
+                  <ModelSelector
+                    id="codex-engine-model"
+                    engine="codex"
+                    model={
+                      config.engines?.codex?.model ?? defaultModelForEngine("codex")
                     }
-                    options={withCurrentValue(OPENAI_MODELS, config.engines?.codex?.model)}
+                    onChange={(v) =>
+                      updateConfig(
+                        ["engines", "codex", "model"],
+                        v ?? defaultModelForEngine("codex"),
+                      )
+                    }
                   />
                 </FieldRow>
                 <FieldRow label="Effort Level">
@@ -1285,6 +1341,43 @@ export default function SettingsPage() {
                       { value: "high", label: "High" },
                       { value: "xhigh", label: "Extra High" },
                     ]}
+                  />
+                </FieldRow>
+
+                <div
+                  className="border-t border-[var(--separator)] mt-[var(--space-3)] pt-[var(--space-3)]"
+                />
+
+                <div
+                  className="text-[length:var(--text-caption1)] font-[var(--weight-semibold)] text-[var(--text-tertiary)] mb-[var(--space-2)]"
+                >
+                  Gemini
+                </div>
+                <FieldRow label="Binary Path">
+                  <SettingsInput
+                    value={config.engines?.gemini?.bin ?? ""}
+                    onChange={(v) =>
+                      updateConfig(["engines", "gemini", "bin"], v)
+                    }
+                    placeholder="gemini"
+                  />
+                </FieldRow>
+                <FieldRow label="Model" htmlFor="gemini-engine-model">
+                  <ModelSelector
+                    id="gemini-engine-model"
+                    engine="gemini"
+                    model={
+                      config.engines?.gemini?.model ?? defaultModelForEngine("gemini")
+                    }
+                    onChange={(v) => {
+                      updateConfig(
+                        ["engines", "gemini", "model"],
+                        v ?? defaultModelForEngine("gemini"),
+                      )
+                      if (!config.engines?.gemini?.bin) {
+                        updateConfig(["engines", "gemini", "bin"], "gemini")
+                      }
+                    }}
                   />
                 </FieldRow>
               </Section>
@@ -1447,42 +1540,44 @@ export default function SettingsPage() {
                         updateConfig(["connectors", "slack", "triage", "engine"], "codex")
                       }
                       if (v && !config.connectors?.slack?.triage?.model) {
-                        updateConfig(["connectors", "slack", "triage", "model"], "gpt-5-nano")
+                        updateConfig(
+                          ["connectors", "slack", "triage", "model"],
+                          defaultTriageModelForEngine("codex"),
+                        )
                       }
                     }}
                   />
                 </FieldRow>
-                <FieldRow label="Engine">
+                <FieldRow label="モデルのベンダー" htmlFor="triage-model-vendor">
                   <SettingsSelect
+                    id="triage-model-vendor"
                     value={config.connectors?.slack?.triage?.engine ?? "codex"}
-                    onChange={(v) =>
+                    onChange={(v) => {
+                      const engine = v as TriageModelEngine
                       updateConfig(
                         ["connectors", "slack", "triage", "engine"],
-                        v as "claude" | "codex",
+                        engine,
                       )
-                    }
-                    options={[
-                      { value: "codex", label: "Codex (lightweight)" },
-                      { value: "claude", label: "Claude" },
-                    ]}
+                      updateConfig(
+                        ["connectors", "slack", "triage", "model"],
+                        defaultTriageModelForEngine(engine),
+                      )
+                    }}
+                    options={TRIAGE_MODEL_VENDORS}
                   />
                 </FieldRow>
-                <FieldRow label="Model">
-                  <SettingsSelect
-                    value={config.connectors?.slack?.triage?.model ?? ""}
+                <FieldRow label="モデル" htmlFor="triage-model">
+                  <ModelSelector
+                    id="triage-model"
+                    engine={config.connectors?.slack?.triage?.engine ?? "codex"}
+                    model={config.connectors?.slack?.triage?.model}
+                    allowAutomatic
                     onChange={(v) =>
                       updateConfig(
                         ["connectors", "slack", "triage", "model"],
-                        v || undefined,
+                        v ?? null,
                       )
                     }
-                    options={[
-                      { value: "", label: "自動（エンジン既定）" },
-                      ...withCurrentValue(
-                        modelsForEngine(config.connectors?.slack?.triage?.engine ?? "codex"),
-                        config.connectors?.slack?.triage?.model,
-                      ),
-                    ]}
                   />
                 </FieldRow>
                 <FieldRow label="タイムアウト (ms)">
@@ -1558,42 +1653,44 @@ export default function SettingsPage() {
                         updateConfig(["connectors", "slack", "goalExtraction", "engine"], "codex")
                       }
                       if (v && !config.connectors?.slack?.goalExtraction?.model) {
-                        updateConfig(["connectors", "slack", "goalExtraction", "model"], "gpt-5-nano")
+                        updateConfig(
+                          ["connectors", "slack", "goalExtraction", "model"],
+                          defaultTriageModelForEngine("codex"),
+                        )
                       }
                     }}
                   />
                 </FieldRow>
-                <FieldRow label="Engine">
+                <FieldRow label="モデルのベンダー" htmlFor="goal-model-vendor">
                   <SettingsSelect
+                    id="goal-model-vendor"
                     value={config.connectors?.slack?.goalExtraction?.engine ?? "codex"}
-                    onChange={(v) =>
+                    onChange={(v) => {
+                      const engine = v as TriageModelEngine
                       updateConfig(
                         ["connectors", "slack", "goalExtraction", "engine"],
-                        v as "claude" | "codex",
+                        engine,
                       )
-                    }
-                    options={[
-                      { value: "codex", label: "Codex (lightweight)" },
-                      { value: "claude", label: "Claude" },
-                    ]}
+                      updateConfig(
+                        ["connectors", "slack", "goalExtraction", "model"],
+                        defaultTriageModelForEngine(engine),
+                      )
+                    }}
+                    options={TRIAGE_MODEL_VENDORS}
                   />
                 </FieldRow>
-                <FieldRow label="Model">
-                  <SettingsSelect
-                    value={config.connectors?.slack?.goalExtraction?.model ?? ""}
+                <FieldRow label="モデル" htmlFor="goal-model">
+                  <ModelSelector
+                    id="goal-model"
+                    engine={config.connectors?.slack?.goalExtraction?.engine ?? "codex"}
+                    model={config.connectors?.slack?.goalExtraction?.model}
+                    allowAutomatic
                     onChange={(v) =>
                       updateConfig(
                         ["connectors", "slack", "goalExtraction", "model"],
-                        v || undefined,
+                        v ?? null,
                       )
                     }
-                    options={[
-                      { value: "", label: "自動（エンジン既定）" },
-                      ...withCurrentValue(
-                        modelsForEngine(config.connectors?.slack?.goalExtraction?.engine ?? "codex"),
-                        config.connectors?.slack?.goalExtraction?.model,
-                      ),
-                    ]}
                   />
                 </FieldRow>
                 <FieldRow label="タイムアウト (ms)">

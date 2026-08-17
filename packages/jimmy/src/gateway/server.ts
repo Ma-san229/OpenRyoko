@@ -10,7 +10,7 @@ import type { JinnConfig, Connector, Employee } from "../shared/types.js";
 import { loadConfig } from "../shared/config.js";
 import { invalidateModelRegistry } from "../shared/models.js";
 import { configureLogger, logger } from "../shared/logger.js";
-import { initDb, recoverStaleSessions, recoverStaleQueueItems, getInterruptedSessions, listSessions, updateSession, getSession } from "../sessions/registry.js";
+import { initDb, scheduleFtsBackfill, recoverStaleSessions, recoverStaleQueueItems, getInterruptedSessions, listSessions, updateSession, getSession } from "../sessions/registry.js";
 import { SessionManager, type RouteOptions } from "../sessions/manager.js";
 import { ClaudeEngine } from "../engines/claude.js";
 import { CodexEngine } from "../engines/codex.js";
@@ -26,6 +26,14 @@ import { cleanupSessionSettings, seedTrust } from "../shared/claude-settings.js"
 import { GATEWAY_INFO_FILE, HOOK_RELAY_SCRIPT, CLAUDE_SETTINGS_DIR, JINN_HOME } from "../shared/paths.js";
 import { handleApiRequest, resumePendingWebQueueItems, type ApiContext } from "./api.js";
 import { ensureFilesDir } from "./files.js";
+import { ensureOwnerOnlyDirectory } from "../shared/owner-only.js";
+import {
+  authRequiredForRequest,
+  ensureGatewayAuthToken,
+  shouldRequireGatewayAuth,
+  validateGatewayExposure,
+  verifyGatewayAuth,
+} from "./auth.js";
 import { initStt } from "../stt/stt.js";
 import { startWatchers, stopWatchers, syncSkillSymlinks } from "./watcher.js";
 import { SlackConnector } from "../connectors/slack/index.js";
@@ -36,6 +44,9 @@ import { TelegramConnector } from "../connectors/telegram/index.js";
 import { loadJobs } from "../cron/jobs.js";
 import { startScheduler, reloadScheduler, stopScheduler } from "../cron/scheduler.js";
 import { scanOrg } from "./org.js";
+import { createDailyDatabaseBackup } from "../sessions/backup.js";
+import { getDiskSpaceStatus } from "../shared/storage-health.js";
+import { requestOriginAllowed } from "./request-origin.js";
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -131,6 +142,17 @@ export async function startGateway(
 ): Promise<GatewayCleanup> {
   const bootId = randomUUID().slice(0, 8);
 
+  const exposure = validateGatewayExposure(config);
+  if (!exposure.ok) throw new Error(exposure.error);
+
+  // Heal legacy instances before opening config, database, hook settings or logs.
+  const homePermission = ensureOwnerOnlyDirectory(JINN_HOME);
+  if (homePermission.warning) {
+    console.warn(`[openryoko] could not restrict ${JINN_HOME} to the current user: ${homePermission.warning}`);
+  }
+  const authToken = ensureGatewayAuthToken(JINN_HOME);
+  const authRequired = shouldRequireGatewayAuth(config);
+
   // Configure logging
   configureLogger({
     level: config.logging.level,
@@ -142,7 +164,19 @@ export async function startGateway(
   logger.info(`Starting ${gatewayName} gateway (boot ${bootId}, pid ${process.pid})...`);
 
   // Initialize database and recover any sessions stuck from a previous run
-  initDb();
+  const database = initDb();
+  void scheduleFtsBackfill();
+  const disk = getDiskSpaceStatus();
+  if (disk.level === "warning" || disk.level === "critical") {
+    const freeMiB = disk.freeBytes === null ? "unknown" : Math.floor(disk.freeBytes / 1024 ** 2);
+    logger.warn(`Low disk space: ${freeMiB} MiB free (${disk.freePercent?.toFixed(1) ?? "unknown"}%)`);
+  }
+  try {
+    const backup = await createDailyDatabaseBackup(database);
+    if (backup.created) logger.info(`Created daily database backup: ${backup.file}`);
+  } catch (error) {
+    logger.warn(`Database backup failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
   ensureFilesDir();
   const recovered = recoverStaleSessions();
   if (recovered > 0) {
@@ -198,6 +232,7 @@ export async function startGateway(
       hookRegistry,
       claudeEngine,
       config.engines?.claude?.interactiveTurnTimeoutMs ?? 90 * 60 * 1000,
+      config.engines?.claude?.autoApproveSafetyPrompts === true,
     );
     copyHookRelayAsset();
     // Pre-trust JINN_HOME in the real ~/.claude.json so PTY-spawned Claude (cwd =
@@ -874,6 +909,8 @@ export async function startGateway(
     clearSuppressNextConnectorReload,
     hookRegistry,
     hookSecret: useInteractiveClaude ? hookSecret : undefined,
+    authToken,
+    authHome: JINN_HOME,
   };
 
   // NOTE: replaying pending web queue items is deferred until AFTER the server is
@@ -911,7 +948,7 @@ export async function startGateway(
     if (LOOPBACK_HOSTNAMES.has(hostname)) return true;
     if (hostname === configuredHost) return true;
     // Bare-IP case where the operator pinned to a LAN address.
-    if (configuredHost === "0.0.0.0") return true; // explicit opt-in: any host
+    if (configuredHost === "0.0.0.0" || configuredHost === "::") return true; // explicit wildcard bind
     return false;
   }
 
@@ -928,29 +965,39 @@ export async function startGateway(
       return;
     }
 
-    // CORS: restrict to localhost-style origins by default. The operator
-    // can broaden via `gateway.host = 0.0.0.0`, in which case we mirror
-    // the request's Origin header (still safer than a blanket `*`).
     const origin = req.headers.origin as string | undefined;
-    if (origin && configuredHost !== "0.0.0.0") {
-      try {
-        const u = new URL(origin);
-        if (LOOPBACK_HOSTNAMES.has(u.hostname)) {
-          res.setHeader("Access-Control-Allow-Origin", origin);
-          res.setHeader("Vary", "Origin");
-        }
-      } catch { /* invalid Origin header — leave CORS unset */ }
-    } else if (origin && configuredHost === "0.0.0.0") {
-      // explicit opt-in: reflect the origin (subject to operator policy)
+    if (!requestOriginAllowed(origin, req.headers.host, configuredHost)) {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "origin_not_allowed" }));
+      return;
+    }
+
+    // The request has already passed the active Origin guard above. Reflecting
+    // here enables legitimate same-origin/cross-spelling loopback clients.
+    if (origin) {
       res.setHeader("Access-Control-Allow-Origin", origin);
       res.setHeader("Vary", "Origin");
     }
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
     if (req.method === "OPTIONS") {
       res.writeHead(204);
       res.end();
+      return;
+    }
+
+    const pathname = url.split("?")[0];
+    const sensitiveAuthRoute = pathname === "/api/auth/pairing-codes" || pathname.startsWith("/api/auth/devices");
+    if (
+      (sensitiveAuthRoute || (authRequired && authRequiredForRequest(req.method, pathname)))
+      && !verifyGatewayAuth(req.headers, authToken, JINN_HOME)
+    ) {
+      res.writeHead(401, {
+        "Content-Type": "application/json",
+        "WWW-Authenticate": 'Bearer realm="OpenRyoko"',
+      });
+      res.end(JSON.stringify({ error: "Missing or invalid gateway authentication" }));
       return;
     }
 
@@ -994,31 +1041,13 @@ export async function startGateway(
     });
   });
 
-  // Origin guard for WS upgrades. WebSocket isn't covered by CORS preflight, so a
-  // cross-site browser page could otherwise open /ws/pty and inject stdin into the
-  // Claude PTY. Allow only same-host / loopback / configured-host origins; a non-
-  // browser client (no Origin header) is allowed. Mirrors the HTTP CORS intent.
-  function wsOriginAllowed(originHeader: string | undefined, hostHeader: string | undefined): boolean {
-    if (!originHeader) return true; // non-browser client
-    let originHost: string;
-    try { originHost = new URL(originHeader).hostname; } catch { return false; }
-    if (LOOPBACK_HOSTNAMES.has(originHost)) return true;
-    if (originHost === configuredHost) return true;
-    // Same-origin as the request's Host (strip port) — the gateway-served UI.
-    if (hostHeader) {
-      const lastColon = hostHeader.lastIndexOf(":");
-      const closingBracket = hostHeader.lastIndexOf("]");
-      const hostname = lastColon > closingBracket ? hostHeader.slice(0, lastColon) : hostHeader;
-      if (originHost === hostname) return true;
-    }
-    return false;
-  }
-
   server.on("upgrade", (req, socket, head) => {
     const reqUrl = req.url || "";
     // DNS-rebinding / cross-host guard — mirror the HTTP request path so a WS
     // upgrade can't bypass it. Applies to both /ws and /ws/pty.
     if (!hostIsAllowed(req.headers.host)) { socket.destroy(); return; }
+    if (!requestOriginAllowed(req.headers.origin, req.headers.host, configuredHost)) { socket.destroy(); return; }
+    if (authRequired && !verifyGatewayAuth(req.headers, authToken, JINN_HOME)) { socket.destroy(); return; }
     if (reqUrl === "/ws") {
       wss.handleUpgrade(req, socket, head, (ws) => {
         wss.emit("connection", ws, req);
@@ -1031,7 +1060,6 @@ export async function startGateway(
     const ptyMatch = reqUrl.split("?")[0].match(/^\/ws\/pty\/([^/]+)$/);
     if (ptyMatch) {
       // /ws/pty forwards stdin to the PTY — reject cross-site browser origins.
-      if (!wsOriginAllowed(req.headers.origin, req.headers.host)) { socket.destroy(); return; }
       let sessionId: string;
       try { sessionId = decodeURIComponent(ptyMatch[1]); } catch { socket.destroy(); return; }
       const ptySession = getSession(sessionId);

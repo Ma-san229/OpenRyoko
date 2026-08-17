@@ -9,7 +9,6 @@ import type {
   Target,
 } from "../shared/types.js";
 import {
-  accumulateSessionCost,
   createSession,
   deleteSession,
   getSession,
@@ -19,6 +18,7 @@ import {
   updateSession,
   type UpdateSessionFields,
 } from "./registry.js";
+import { recordTurnAccounting } from "./accounting.js";
 import { notifyParentSession, notifyRateLimited, notifyRateLimitResumed, notifyDiscordChannel } from "./callbacks.js";
 import { buildContext } from "./context.js";
 import { normalizeDelivery, normalizeTurns, deliverPublic, type DeliveryContext } from "./reply-disposition.js";
@@ -799,7 +799,7 @@ export class SessionManager {
 
             insertMessage(session.id, "assistant", fallbackText);
             if (fallbackResult.cost || fallbackResult.numTurns) {
-              accumulateSessionCost(session.id, fallbackResult.cost ?? 0, fallbackResult.numTurns ?? 1);
+              recordTurnAccounting(session.id, fallbackResult);
             }
 
             // Persist Codex thread id so future fallbacks can resume it
@@ -974,7 +974,7 @@ export class SessionManager {
 
             insertMessage(session.id, "assistant", retryText);
             if (retryResult.cost || retryResult.numTurns) {
-              accumulateSessionCost(session.id, retryResult.cost ?? 0, retryResult.numTurns ?? 1);
+              recordTurnAccounting(session.id, retryResult);
             }
 
             // Clear typing indicator & reactions
@@ -1038,9 +1038,7 @@ export class SessionManager {
         : result.error || "(No response from engine)";
 
       insertMessage(session.id, "assistant", responseText);
-      if (result.cost || result.numTurns) {
-        accumulateSessionCost(session.id, result.cost ?? 0, result.numTurns ?? 1);
-      }
+      recordTurnAccounting(session.id, result);
       if (decorateMessages && connector.setTypingStatus) {
         await connector.setTypingStatus(target.channel, threadTs, "").catch(() => {});
       }

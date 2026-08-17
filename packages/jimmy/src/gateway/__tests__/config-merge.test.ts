@@ -45,4 +45,22 @@ describe("deepMerge (PUT /api/config)", () => {
     expect(off.engines.claude.interactive).toBe(false);
     expect((off as typeof existing).connectors.slack.botToken).toBe("xoxb-secret");
   });
+
+  it("removes an optional key when the update explicitly sends null", () => {
+    const withTriageModel = {
+      ...existing,
+      connectors: {
+        slack: {
+          ...existing.connectors.slack,
+          triage: { enabled: true, engine: "codex", model: "gpt-5-nano" },
+        },
+      },
+    };
+
+    const merged = deepMerge(withTriageModel as Record<string, unknown>, {
+      connectors: { slack: { triage: { model: null } } },
+    }) as typeof withTriageModel;
+
+    expect(merged.connectors.slack.triage).toEqual({ enabled: true, engine: "codex" });
+  });
 });
