@@ -555,6 +555,12 @@ export interface JinnConfig {
     authRequired?: boolean;
     authDisabled?: boolean;
     insecureAllowUnauthenticatedNetwork?: boolean;
+    /** Hostnames accepted by the DNS-rebinding guard (for reverse proxies). */
+    allowedHosts?: string[];
+    /** Honor X-Forwarded-Proto only when requests arrive through a trusted proxy. */
+    trustProxyHeaders?: boolean;
+    /** Exact remote IP addresses allowed to supply trusted proxy headers. */
+    trustedProxyAddresses?: string[];
   };
   engines: {
     default: "claude" | "codex" | "gemini";

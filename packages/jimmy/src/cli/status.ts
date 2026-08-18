@@ -2,6 +2,7 @@ import { getStatus } from "../gateway/lifecycle.js";
 import { loadConfig } from "../shared/config.js";
 import { JINN_HOME, PID_FILE } from "../shared/paths.js";
 import fs from "node:fs";
+import { readGatewayAuthToken } from "../gateway/auth.js";
 
 export async function runStatus(): Promise<void> {
   if (!fs.existsSync(JINN_HOME)) {
@@ -39,7 +40,11 @@ export async function runStatus(): Promise<void> {
   try {
     const config = loadConfig();
     const url = `http://${config.gateway.host}:${config.gateway.port}/api/status`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+    const token = readGatewayAuthToken(JINN_HOME);
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(3000),
+      headers: token ? { authorization: `Bearer ${token}` } : undefined,
+    });
     if (res.ok) {
       const data = await res.json();
       console.log(`  ポート: ${config.gateway.port}`);

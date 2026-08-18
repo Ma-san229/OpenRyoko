@@ -28,8 +28,9 @@ import { handleApiRequest, resumePendingWebQueueItems, type ApiContext } from ".
 import { ensureFilesDir } from "./files.js";
 import { ensureOwnerOnlyDirectory } from "../shared/owner-only.js";
 import {
-  authRequiredForRequest,
   ensureGatewayAuthToken,
+  gatewayRequestNeedsAuth,
+  isNetworkHost,
   shouldRequireGatewayAuth,
   validateGatewayExposure,
   verifyGatewayAuth,
@@ -47,6 +48,8 @@ import { scanOrg } from "./org.js";
 import { createDailyDatabaseBackup } from "../sessions/backup.js";
 import { getDiskSpaceStatus } from "../shared/storage-health.js";
 import { requestOriginAllowed } from "./request-origin.js";
+import { hostHeaderAllowed, localInterfaceHosts } from "./host-guard.js";
+import { staticPathWithinRoot } from "./static-path.js";
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -100,7 +103,7 @@ function serveStatic(
 
   // Prevent directory traversal
   const resolved = path.resolve(filePath);
-  if (!resolved.startsWith(path.resolve(webDir))) {
+  if (!staticPathWithinRoot(webDir, resolved)) {
     res.writeHead(403);
     res.end("Forbidden");
     return true;
@@ -152,6 +155,13 @@ export async function startGateway(
   }
   const authToken = ensureGatewayAuthToken(JINN_HOME);
   const authRequired = shouldRequireGatewayAuth(config);
+  const hasTrustedProxy = config.gateway.trustProxyHeaders === true && Boolean(config.gateway.trustedProxyAddresses?.length);
+  if (isNetworkHost(config.gateway.host) && config.gateway.authDisabled !== true && !hasTrustedProxy) {
+    console.warn("[openryoko] Network gateway authentication is enabled, but HTTP is not encrypted. Use a VPN/Tailscale tunnel or a trusted HTTPS reverse proxy; set gateway.trustProxyHeaders=true only behind that proxy.");
+  }
+  if (config.gateway.trustProxyHeaders === true && !(config.gateway.trustedProxyAddresses?.length)) {
+    console.warn("[openryoko] gateway.trustProxyHeaders is enabled without gateway.trustedProxyAddresses; forwarded headers will be ignored.");
+  }
 
   // Configure logging
   configureLogger({
@@ -924,32 +934,13 @@ export async function startGateway(
 
   // Loopback Host header guard.
   //
-  // The gateway binds to 127.0.0.1 by default but every API route is
-  // unauthenticated, which makes the daemon vulnerable to classic DNS
-  // rebinding from any browser tab on the same machine: an attacker page
-  // can resolve a hostile DNS name to 127.0.0.1 and then `fetch()` against
-  // our endpoints. We reject any request whose `Host` header isn't a
-  // loopback / explicit-bind value the operator has configured.
+  // The gateway binds to 127.0.0.1 by default. A hostile browser tab can still
+  // target local services through DNS rebinding, so reject requests whose
+  // `Host` is not loopback, a local interface, or explicitly configured.
   const configuredHost = config.gateway.host || "127.0.0.1";
-  const LOOPBACK_HOSTNAMES = new Set([
-    "127.0.0.1",
-    "[::1]",
-    "::1",
-    "localhost",
-  ]);
+  const interfaceHosts = localInterfaceHosts();
   function hostIsAllowed(hostHeader: string | undefined): boolean {
-    if (!hostHeader) return false;
-    // Strip port for comparison; "host:port" or "[::1]:port".
-    const lastColon = hostHeader.lastIndexOf(":");
-    const closingBracket = hostHeader.lastIndexOf("]");
-    const hostname = lastColon > closingBracket
-      ? hostHeader.slice(0, lastColon)
-      : hostHeader;
-    if (LOOPBACK_HOSTNAMES.has(hostname)) return true;
-    if (hostname === configuredHost) return true;
-    // Bare-IP case where the operator pinned to a LAN address.
-    if (configuredHost === "0.0.0.0" || configuredHost === "::") return true; // explicit wildcard bind
-    return false;
+    return hostHeaderAllowed(hostHeader, configuredHost, currentConfig.gateway.allowedHosts, interfaceHosts);
   }
 
   // Create HTTP server
@@ -988,9 +979,8 @@ export async function startGateway(
     }
 
     const pathname = url.split("?")[0];
-    const sensitiveAuthRoute = pathname === "/api/auth/pairing-codes" || pathname.startsWith("/api/auth/devices");
     if (
-      (sensitiveAuthRoute || (authRequired && authRequiredForRequest(req.method, pathname)))
+      gatewayRequestNeedsAuth(authRequired, req.method, pathname)
       && !verifyGatewayAuth(req.headers, authToken, JINN_HOME)
     ) {
       res.writeHead(401, {

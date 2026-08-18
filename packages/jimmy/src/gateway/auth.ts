@@ -2,11 +2,13 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { IncomingMessage } from "node:http";
+import type { TLSSocket } from "node:tls";
 import type { JinnConfig } from "../shared/types.js";
 
 export const AUTH_COOKIE = "ryoko_auth";
 export const AUTH_DEVICE_COOKIE = "ryoko_device";
 export const PAIRING_CODE_TTL_MS = 5 * 60_000;
+export const AUTH_SESSION_TTL_MS = 30 * 24 * 60 * 60_000;
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 interface StoredDevice {
@@ -14,6 +16,7 @@ interface StoredDevice {
   name: string;
   secretHash: string;
   createdAt: string;
+  expiresAt?: string;
   lastSeenAt: string;
   lastIp?: string;
   userAgent?: string;
@@ -90,12 +93,21 @@ export function validateGatewayExposure(config: Pick<JinnConfig, "gateway">): { 
 
 export function authRequiredForRequest(method: string | undefined, pathname: string): boolean {
   const verb = (method || "GET").toUpperCase();
-  if (pathname === "/api/status") return false;
+  if (pathname === "/api/health" && verb === "GET") return false;
   if (pathname === "/api/auth/state" && verb === "GET") return false;
   if (pathname === "/api/auth/pair" && verb === "POST") return false;
   if (pathname === "/api/auth/logout" && verb === "POST") return false;
   if (pathname === "/api/internal/hook" && verb === "POST") return false;
   return pathname.startsWith("/api/") || pathname === "/ws" || pathname.startsWith("/ws/pty/");
+}
+
+export function gatewayRequestNeedsAuth(
+  authRequired: boolean,
+  method: string | undefined,
+  pathname: string,
+): boolean {
+  const sensitiveAuthRoute = pathname === "/api/auth/pairing-codes" || pathname.startsWith("/api/auth/devices");
+  return sensitiveAuthRoute || (authRequired && authRequiredForRequest(method, pathname));
 }
 
 function parseCookies(header: string | undefined): Record<string, string> {
@@ -135,8 +147,22 @@ function loadDevices(home: string): StoredDevice[] {
 }
 function saveDevices(home: string, devices: StoredDevice[]): void { atomicJson(deviceFile(home), { devices }); }
 
-export function createAuthSession(home: string, req: Pick<IncomingMessage, "headers" | "socket">): { id: string; secret: string } {
-  const now = new Date().toISOString();
+function sessionExpiresAt(device: StoredDevice): number {
+  const explicit = device.expiresAt ? Date.parse(device.expiresAt) : NaN;
+  if (Number.isFinite(explicit)) return explicit;
+  const created = Date.parse(device.createdAt);
+  return Number.isFinite(created) ? created + AUTH_SESSION_TTL_MS : 0;
+}
+
+function activeDevices(home: string, now: number): StoredDevice[] {
+  const devices = loadDevices(home);
+  const active = devices.filter((device) => sessionExpiresAt(device) > now);
+  if (active.length !== devices.length) saveDevices(home, active);
+  return active;
+}
+
+export function createAuthSession(home: string, req: Pick<IncomingMessage, "headers" | "socket">, now = Date.now()): { id: string; secret: string } {
+  const createdAt = new Date(now).toISOString();
   const id = `d_${crypto.randomBytes(12).toString("base64url")}`;
   const secret = crypto.randomBytes(32).toString("base64url");
   const userAgent = typeof req.headers["user-agent"] === "string" ? req.headers["user-agent"] : undefined;
@@ -144,8 +170,9 @@ export function createAuthSession(home: string, req: Pick<IncomingMessage, "head
     id,
     name: userAgent?.includes("Mobile") ? "Mobile browser" : "Browser",
     secretHash: digest("ryoko-device", secret),
-    createdAt: now,
-    lastSeenAt: now,
+    createdAt,
+    expiresAt: new Date(now + AUTH_SESSION_TTL_MS).toISOString(),
+    lastSeenAt: createdAt,
     lastIp: req.socket.remoteAddress,
     userAgent,
   };
@@ -153,8 +180,8 @@ export function createAuthSession(home: string, req: Pick<IncomingMessage, "head
   return { id, secret };
 }
 
-export function listAuthSessions(home: string, currentId?: string): Array<Omit<StoredDevice, "secretHash"> & { current: boolean }> {
-  return loadDevices(home).map(({ secretHash: _secretHash, ...device }) => ({ ...device, current: device.id === currentId }));
+export function listAuthSessions(home: string, currentId?: string, now = Date.now()): Array<Omit<StoredDevice, "secretHash"> & { current: boolean }> {
+  return activeDevices(home, now).map(({ secretHash: _secretHash, ...device }) => ({ ...device, current: device.id === currentId }));
 }
 
 export function revokeAuthSession(home: string, id: string): boolean {
@@ -165,7 +192,7 @@ export function revokeAuthSession(home: string, id: string): boolean {
   return true;
 }
 
-export function verifyGatewayAuth(headers: IncomingMessage["headers"], expectedToken: string, home: string): boolean {
+export function verifyGatewayAuth(headers: IncomingMessage["headers"], expectedToken: string, home: string, now = Date.now()): boolean {
   const authorization = Array.isArray(headers.authorization) ? headers.authorization[0] : headers.authorization;
   if (typeof authorization === "string") {
     const match = authorization.match(/^Bearer\s+(.+)$/i);
@@ -177,7 +204,11 @@ export function verifyGatewayAuth(headers: IncomingMessage["headers"], expectedT
   const secret = cookies[authCookieName(home)];
   if (!id || !secret) return false;
   const device = loadDevices(home).find((candidate) => candidate.id === id);
-  return Boolean(device && safeEqual(device.secretHash, digest("ryoko-device", secret)));
+  return Boolean(
+    device
+    && sessionExpiresAt(device) > now
+    && safeEqual(device.secretHash, digest("ryoko-device", secret)),
+  );
 }
 
 function pairingFile(home: string): string { return path.join(home, "pairing-codes.json"); }
@@ -209,17 +240,47 @@ export function consumePairingCode(home: string, raw: string, now = Date.now()):
   const entries = loadPairing(home);
   const hash = digest("ryoko-pairing", normalized);
   const entry = entries[hash];
+  if (!entry) return false;
   delete entries[hash];
   savePairing(home, entries);
   return Boolean(entry && entry.expiresAt >= now);
 }
 
 export function authCookieHeaders(secret: string, deviceId: string, home: string, secure = false): string[] {
-  const common = `Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000${secure ? "; Secure" : ""}`;
+  const common = `Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(AUTH_SESSION_TTL_MS / 1_000)}${secure ? "; Secure" : ""}`;
   return [
     `${authCookieName(home)}=${encodeURIComponent(secret)}; ${common}`,
     `${authDeviceCookieName(home)}=${encodeURIComponent(deviceId)}; ${common}`,
   ];
+}
+
+/** Trust proxy transport headers only when the operator opted in. */
+export function requestFromTrustedProxy(
+  req: Pick<IncomingMessage, "headers" | "socket">,
+  trustProxyHeaders = false,
+  trustedProxyAddresses: string[] = [],
+): boolean {
+  if (!trustProxyHeaders || !Array.isArray(trustedProxyAddresses)) return false;
+  const remote = req.socket.remoteAddress;
+  if (!remote) return false;
+  const normalized = remote.toLowerCase().replace(/^::ffff:/, "");
+  return trustedProxyAddresses.some((address) => (
+    typeof address === "string"
+    && address.trim().toLowerCase().replace(/^::ffff:/, "") === normalized
+  ));
+}
+
+export function requestIsSecure(
+  req: Pick<IncomingMessage, "headers" | "socket">,
+  trustProxyHeaders = false,
+  trustedProxyAddresses: string[] = [],
+): boolean {
+  if ((req.socket as TLSSocket).encrypted === true) return true;
+  if (!requestFromTrustedProxy(req, trustProxyHeaders, trustedProxyAddresses)) return false;
+  const forwarded = Array.isArray(req.headers["x-forwarded-proto"])
+    ? req.headers["x-forwarded-proto"][0]
+    : req.headers["x-forwarded-proto"];
+  return forwarded?.split(",", 1)[0]?.trim().toLowerCase() === "https";
 }
 
 export function clearAuthCookieHeaders(home: string): string[] {
