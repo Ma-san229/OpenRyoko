@@ -19,6 +19,55 @@ export interface QueueItem {
   createdAt: string;
 }
 
+export interface SessionPageResponse {
+  sessions: Record<string, unknown>[]
+  nextCursor: string | null
+}
+
+export interface SessionMessage {
+  id: string
+  role: 'user' | 'assistant' | 'notification'
+  content: string
+  timestamp: number
+}
+
+export interface MessagePageResponse {
+  messages: SessionMessage[]
+  hasOlder: boolean
+  hasNewer?: boolean
+  anchorFound?: boolean
+}
+
+export interface MessageSearchResult {
+  messageId: string
+  sessionId: string
+  snippet: string
+  role: 'user' | 'assistant'
+  timestamp: number
+  employee: string | null
+  engine: string | null
+}
+
+export interface MessageSearchResponse {
+  query: string
+  results: MessageSearchResult[]
+  indexing: boolean
+}
+
+export interface ClaudeUsageResponse {
+  available: boolean
+  source: 'claude-oauth-usage'
+  refreshedAt: string
+  windows: Array<{
+    name: string
+    usedPercent: number
+    windowDurationMins?: number
+    resetsAt?: number
+    resetsAtIso?: string
+  }>
+  unavailableReason?: 'disabled' | 'no-oauth-credentials' | 'provider-unavailable'
+}
+
 export interface Employee {
   name: string;
   displayName: string;
@@ -122,8 +171,33 @@ interface UploadedFile {
 
 export const api = {
   getStatus: () => get<Record<string, unknown>>("/api/status"),
+  getClaudeUsage: () => get<ClaudeUsageResponse>("/api/usage/claude"),
   getSessions: () => get<Record<string, unknown>[]>("/api/sessions"),
-  getSession: (id: string) => get<Record<string, unknown>>(`/api/sessions/${id}`),
+  getSessionPage: (cursor?: string, limit = 100) => {
+    const params = new URLSearchParams({ limit: String(limit) })
+    if (cursor) params.set('cursor', cursor)
+    return get<SessionPageResponse>(`/api/sessions?${params}`)
+  },
+  getSession: (id: string, options?: { last?: number; messages?: boolean }) => {
+    const params = new URLSearchParams()
+    if (options?.last) params.set('last', String(options.last))
+    if (options?.messages === false) params.set('messages', '0')
+    const suffix = params.size ? `?${params}` : ''
+    return get<Record<string, unknown>>(`/api/sessions/${id}${suffix}`)
+  },
+  getSessionMessages: (id: string, before?: string, limit = 100) => {
+    const params = new URLSearchParams({ limit: String(limit) })
+    if (before) params.set('before', before)
+    return get<MessagePageResponse>(`/api/sessions/${id}/messages?${params}`)
+  },
+  getSessionMessageWindow: (id: string, around: string, radius = 50) => {
+    const params = new URLSearchParams({ around, limit: String(radius) })
+    return get<MessagePageResponse>(`/api/sessions/${id}/messages?${params}`)
+  },
+  searchMessages: (query: string, limit = 20) => {
+    const params = new URLSearchParams({ q: query, limit: String(limit) })
+    return get<MessageSearchResponse>(`/api/search/messages?${params}`)
+  },
   getSessionChildren: (id: string) => get<Record<string, unknown>[]>(`/api/sessions/${id}/children`),
   updateSession: (id: string, data: { title?: string }) =>
     put<Record<string, unknown>>(`/api/sessions/${id}`, data),

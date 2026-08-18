@@ -77,6 +77,8 @@ export const TEMPLATE_MIGRATIONS_DIR = path.join(TEMPLATE_DIR, "migrations");
 export const GATEWAY_INFO_FILE = path.join(JINN_HOME, "gateway.json");
 /** Per-session Claude Code --settings files written for PTY turns. */
 export const CLAUDE_SETTINGS_DIR = path.join(JINN_HOME, "tmp", "settings");
+/** Durable, bounded reconnect scrollback for interactive PTYs. */
+export const PTY_SNAPSHOTS_DIR = path.join(JINN_HOME, "tmp", "pty-snapshots");
 /** The hook-relay script copied next to JINN_HOME at boot; PTY-spawned Claude
  *  invokes it from its hook config to POST turn events back to the gateway. */
 export const HOOK_RELAY_SCRIPT = path.join(JINN_HOME, "hook-relay.mjs");

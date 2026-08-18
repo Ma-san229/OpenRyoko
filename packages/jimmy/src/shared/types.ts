@@ -1,4 +1,4 @@
-export type StreamDeltaType = "text" | "text_snapshot" | "tool_use" | "tool_result" | "status" | "error" | "context";
+export type StreamDeltaType = "text" | "text_snapshot" | "tool_use" | "tool_result" | "permission" | "status" | "error" | "context";
 
 export interface StreamDelta {
   type: StreamDeltaType;
@@ -548,7 +548,14 @@ export type ModelsConfig = Record<string, EngineModelsConfig>;
 
 export interface JinnConfig {
   jinn?: { version?: string };
-  gateway: { port: number; host: string; streaming?: boolean };
+  gateway: {
+    port: number;
+    host: string;
+    streaming?: boolean;
+    authRequired?: boolean;
+    authDisabled?: boolean;
+    insecureAllowUnauthenticatedNetwork?: boolean;
+  };
   engines: {
     default: "claude" | "codex" | "gemini";
     claude: {
@@ -560,6 +567,9 @@ export interface JinnConfig {
        *  billing) instead of headless `claude -p`. Replaces the engine under the "claude"
        *  key when true. Default false (headless `-p`). */
       interactive?: boolean;
+      /** Dangerous opt-in: approves every unambiguous Claude safety dialog,
+       * including destructive commands. Disabled by default. */
+      autoApproveSafetyPrompts?: boolean;
       /** Max simultaneously-live PTYs for the interactive engine (LRU-evicted). Default 8. */
       maxLivePtys?: number;
       /** Hard ceiling (ms) on a single interactive turn before it is force-settled

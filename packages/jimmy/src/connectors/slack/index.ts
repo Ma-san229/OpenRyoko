@@ -14,7 +14,10 @@ import { buildReplyContext, deriveSessionKey, isOldSlackMessage } from "./thread
 import { formatResponse, downloadAttachment } from "./format.js";
 import { normalizeSpeakerInfo, type SpeakerInfo } from "./speaker.js";
 import { runTriage } from "./triage.js";
-import { isShortAckCandidate } from "./triage-prompt.js";
+import {
+  shouldForceTaskContinuationReply,
+  shouldRunReactOnlyTriage,
+} from "./triage-prompt.js";
 import {
   evaluateRespondPolicy,
   hasMentionScope,
@@ -222,7 +225,7 @@ export class SlackConnector implements Connector {
 
     const channelDescription = ctx.channelName ? `#${ctx.channelName}` : event.channel;
 
-    return runTriage(
+    const decision = await runTriage(
       {
         botName: this.portalName || "Ryoko",
         persona: this.triageConfig?.persona,
@@ -250,6 +253,22 @@ export class SlackConnector implements Connector {
         failOpenAction: ctx.dmEquivalent || !this.botUserId ? "reply" : "silent",
       },
     );
+
+    if (
+      decision.action === "react" &&
+      shouldForceTaskContinuationReply({
+        text: ctx.messageText,
+        dmEquivalent: ctx.dmEquivalent === true,
+        previousWasBot: recentThread.at(-1)?.isBot,
+      })
+    ) {
+      logger.info(
+        `[slack] triage react overridden — task continuation must reach session for ts=${event.ts}`,
+      );
+      return { action: "reply", reason: "task_continuation" };
+    }
+
+    return decision;
   }
 
   private async fetchRecentThreadForTriage(
@@ -257,7 +276,7 @@ export class SlackConnector implements Connector {
     threadTs: string | undefined,
     messageTs: string | undefined,
     limit: number,
-  ): Promise<Array<{ speaker: string; text: string }>> {
+  ): Promise<Array<{ speaker: string; text: string; isBot: boolean }>> {
     try {
       const messages = threadTs
         ? (await this.app.client.conversations.replies({
@@ -274,18 +293,22 @@ export class SlackConnector implements Connector {
 
       if (!messages) return [];
       const chronological = threadTs ? messages : [...messages].reverse();
-      const result: Array<{ speaker: string; text: string }> = [];
+      const result: Array<{ speaker: string; text: string; isBot: boolean }> = [];
       for (const m of chronological) {
+        // conversations.replies may include the event currently being triaged.
+        // Exclude it so the last item really is the preceding speaker/message.
+        if (messageTs && (m as any).ts === messageTs) continue;
         const text = (m as any).text as string | undefined;
         if (!text) continue;
         const userId = (m as any).user as string | undefined;
         const botId = (m as any).bot_id as string | undefined;
-        const speakerLabel = userId
-          ? (await this.resolveSpeakerInfo(userId))?.name ?? userId
-          : botId
-            ? `bot:${botId}`
+        const isBot = !!botId || (!!userId && userId === this.botUserId);
+        const speakerLabel = isBot
+          ? `bot:${botId ?? userId}`
+          : userId
+            ? (await this.resolveSpeakerInfo(userId))?.name ?? userId
             : "unknown";
-        result.push({ speaker: speakerLabel, text });
+        result.push({ speaker: speakerLabel, text, isBot });
       }
       return result;
     } catch (err) {
@@ -503,17 +526,19 @@ export class SlackConnector implements Connector {
           : false;
       // Short-ack exception: the always-reply fast paths (real DMs and
       // DM-equivalent conversations) otherwise swallow the one situation
-      // react-triage is FOR — "ありがとう"/"了解" right after the bot replied
+      // react-triage is FOR — pure appreciation right after the bot replied
       // (the bot having replied is what makes a conversation DM-equivalent).
       // Send lexical short-ack candidates through triage in a 1:1-aware mode
       // (react vs reply, never silent) so a bare thanks can get an emoji
       // instead of a full engine turn. Everything else keeps the fast-path
       // full reply. @-mentions always get a real reply, even short ones.
-      const shortAckTriage =
-        (channelType === "im" || isDmEquivalent) &&
-        !wasMentioned &&
-        attachments.length === 0 &&
-        isShortAckCandidate(rawText);
+      const shortAckTriage = shouldRunReactOnlyTriage({
+        channelType,
+        isDmEquivalent,
+        wasMentioned,
+        attachmentCount: attachments.length,
+        text: rawText,
+      });
       const skipTriage =
         !triageEnabled ||
         wasMentioned ||

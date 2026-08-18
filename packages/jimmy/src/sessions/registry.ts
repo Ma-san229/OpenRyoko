@@ -4,9 +4,13 @@ import { mkdirSync } from 'node:fs';
 import Database from 'better-sqlite3';
 import { v4 as uuidv4 } from 'uuid';
 import { SESSIONS_DB } from '../shared/paths.js';
+import { logger } from '../shared/logger.js';
+import { assertDiskSpaceForWrite } from '../shared/storage-health.js';
 import type { JsonObject, ReplyContext, Session } from '../shared/types.js';
 
 let db: Database.Database;
+let ftsAvailable = true;
+const FTS_BACKFILL_CHUNK = 500;
 
 const CREATE_TABLE = `
 CREATE TABLE IF NOT EXISTS sessions (
@@ -47,6 +51,14 @@ const CREATE_SESSION_KEY_INDEX = `
 CREATE INDEX IF NOT EXISTS idx_sessions_session_key ON sessions (session_key, last_activity)
 `;
 
+const CREATE_SESSION_ACTIVITY_INDEX = `
+CREATE INDEX IF NOT EXISTS idx_sessions_activity_id ON sessions (last_activity DESC, id DESC)
+`;
+
+const CREATE_SESSION_PARENT_INDEX = `
+CREATE INDEX IF NOT EXISTS idx_sessions_parent_session_id ON sessions (parent_session_id, last_activity DESC)
+`;
+
 const CREATE_FILES_TABLE = `
 CREATE TABLE IF NOT EXISTS files (
   id TEXT PRIMARY KEY,
@@ -57,6 +69,106 @@ CREATE TABLE IF NOT EXISTS files (
   created_at TEXT NOT NULL
 )
 `;
+
+function getMeta(database: Database.Database, key: string): string | undefined {
+  return (database.prepare('SELECT value FROM meta WHERE key = ?').get(key) as { value: string } | undefined)?.value;
+}
+
+function setMeta(database: Database.Database, key: string, value: string): void {
+  database.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value);
+}
+
+function initializeFts(database: Database.Database): void {
+  try {
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(content);
+      CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages
+      WHEN new.role IN ('user', 'assistant') BEGIN
+        INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+      END;
+      CREATE TRIGGER IF NOT EXISTS messages_fts_ad AFTER DELETE ON messages
+      WHEN old.role IN ('user', 'assistant') BEGIN
+        DELETE FROM messages_fts WHERE rowid = old.rowid;
+      END;
+      CREATE TRIGGER IF NOT EXISTS messages_fts_au AFTER UPDATE ON messages BEGIN
+        DELETE FROM messages_fts WHERE rowid = old.rowid;
+        INSERT INTO messages_fts(rowid, content)
+          SELECT new.rowid, new.content WHERE new.role IN ('user', 'assistant');
+      END;
+    `);
+    if (getMeta(database, 'fts_backfill_max') === undefined) {
+      const max = database.prepare('SELECT COALESCE(MAX(rowid), 0) AS max FROM messages').get() as { max: number };
+      setMeta(database, 'fts_backfill_max', String(max.max));
+      setMeta(database, 'fts_backfill_rowid', '0');
+      if (max.max === 0) setMeta(database, 'fts_backfill_done', '1');
+    }
+  } catch (err) {
+    ftsAvailable = false;
+    logger.warn(`FTS5 unavailable; message search disabled: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+function ftsBackfillStep(database: Database.Database, chunkSize = FTS_BACKFILL_CHUNK): boolean {
+  if (!ftsAvailable || getMeta(database, 'fts_backfill_done') === '1') return true;
+  const max = Number(getMeta(database, 'fts_backfill_max') ?? '0');
+  const progress = Number(getMeta(database, 'fts_backfill_rowid') ?? '0');
+  const rows = database.prepare(`
+    SELECT rowid, content FROM messages
+    WHERE role IN ('user', 'assistant') AND rowid > ? AND rowid <= ?
+    ORDER BY rowid ASC LIMIT ?
+  `).all(progress, max, Math.max(1, chunkSize)) as Array<{ rowid: number; content: string }>;
+  if (rows.length === 0) {
+    setMeta(database, 'fts_backfill_done', '1');
+    return true;
+  }
+  const insert = database.prepare('INSERT OR REPLACE INTO messages_fts(rowid, content) VALUES (?, ?)');
+  database.transaction((items: typeof rows) => {
+    for (const row of items) insert.run(row.rowid, row.content);
+    setMeta(database, 'fts_backfill_rowid', String(items.at(-1)!.rowid));
+  })(rows);
+  if (rows.at(-1)!.rowid >= max) {
+    setMeta(database, 'fts_backfill_done', '1');
+    return true;
+  }
+  return false;
+}
+
+export function backfillFtsSync(database: Database.Database = initDb(), chunkSize = FTS_BACKFILL_CHUNK): void {
+  while (!ftsBackfillStep(database, chunkSize)) { /* drain */ }
+}
+
+const ftsBackfills = new WeakMap<Database.Database, Promise<void>>();
+
+export function scheduleFtsBackfill(database: Database.Database = initDb(), chunkSize = FTS_BACKFILL_CHUNK): Promise<void> {
+  if (!ftsAvailable || getMeta(database, 'fts_backfill_done') === '1') return Promise.resolve();
+  const current = ftsBackfills.get(database);
+  if (current) return current;
+  const promise = new Promise<void>((resolve) => {
+    const pump = () => {
+      try {
+        if (ftsBackfillStep(database, chunkSize)) {
+          ftsBackfills.delete(database);
+          resolve();
+        } else {
+          setImmediate(pump);
+        }
+      } catch (err) {
+        ftsAvailable = false;
+        ftsBackfills.delete(database);
+        logger.warn(`FTS5 backfill failed; message search disabled until restart: ${err instanceof Error ? err.message : String(err)}`);
+        resolve();
+      }
+    };
+    setImmediate(pump);
+  });
+  ftsBackfills.set(database, promise);
+  return promise;
+}
+
+export function isFtsBackfillPending(database: Database.Database = initDb()): boolean {
+  return ftsAvailable && getMeta(database, 'fts_backfill_done') !== '1';
+}
 
 function parseJsonObject(value: unknown): JsonObject | null {
   if (typeof value !== 'string' || !value.trim()) return null;
@@ -107,8 +219,11 @@ export function initDb(): Database.Database {
   db.exec(CREATE_TABLE);
   db.exec(CREATE_MESSAGES_TABLE);
   db.exec(CREATE_MESSAGES_INDEX);
+  initializeFts(db);
   migrateSessionsSchema(db);
   db.exec(CREATE_SESSION_KEY_INDEX);
+  db.exec(CREATE_SESSION_ACTIVITY_INDEX);
+  db.exec(CREATE_SESSION_PARENT_INDEX);
   db.exec(`
     CREATE TABLE IF NOT EXISTS queue_items (
       id TEXT PRIMARY KEY,
@@ -223,6 +338,7 @@ function generateTitle(prompt?: string): string {
 }
 
 export function createSession(opts: CreateSessionOpts & { prompt?: string; portalName?: string }): Session {
+  assertDiskSpaceForWrite();
   const db = initDb();
   const now = new Date().toISOString();
   const id = uuidv4();
@@ -377,6 +493,36 @@ export interface ListSessionsFilter {
   engine?: string;
 }
 
+export interface SessionPageCursor {
+  lastActivity: string;
+  id: string;
+}
+
+export interface SessionPage {
+  sessions: Session[];
+  nextCursor: SessionPageCursor | null;
+}
+
+export function listSessionPage(limit = 100, cursor?: SessionPageCursor): SessionPage {
+  const database = initDb();
+  const cap = Math.max(1, Math.min(Math.floor(limit) || 100, 200));
+  const rows = cursor
+    ? database.prepare(`
+        SELECT * FROM sessions
+        WHERE last_activity < ? OR (last_activity = ? AND id < ?)
+        ORDER BY last_activity DESC, id DESC LIMIT ?
+      `).all(cursor.lastActivity, cursor.lastActivity, cursor.id, cap + 1)
+    : database.prepare('SELECT * FROM sessions ORDER BY last_activity DESC, id DESC LIMIT ?').all(cap + 1) as Record<string, unknown>[];
+  const typedRows = rows as Record<string, unknown>[];
+  const hasMore = typedRows.length > cap;
+  const pageRows = hasMore ? typedRows.slice(0, cap) : typedRows;
+  const last = pageRows.at(-1);
+  return {
+    sessions: pageRows.map(rowToSession),
+    nextCursor: hasMore && last ? { lastActivity: String(last.last_activity), id: String(last.id) } : null,
+  };
+}
+
 export function listSessions(filter?: ListSessionsFilter): Session[] {
   const db = initDb();
   const conditions: string[] = [];
@@ -522,7 +668,18 @@ export interface SessionMessage {
   timestamp: number;
 }
 
+export interface MessagePage {
+  messages: SessionMessage[];
+  hasOlder: boolean;
+}
+
+export interface MessageWindow extends MessagePage {
+  hasNewer: boolean;
+  anchorFound: boolean;
+}
+
 export function insertMessage(sessionId: string, role: string, content: string): void {
+  assertDiskSpaceForWrite();
   const db = initDb();
   const id = uuidv4();
   db.prepare('INSERT INTO messages (id, session_id, role, content, timestamp) VALUES (?, ?, ?, ?, ?)').run(id, sessionId, role, content, Date.now());
@@ -531,6 +688,116 @@ export function insertMessage(sessionId: string, role: string, content: string):
 export function getMessages(sessionId: string): SessionMessage[] {
   const db = initDb();
   return db.prepare('SELECT id, role, content, timestamp FROM messages WHERE session_id = ? ORDER BY timestamp ASC').all(sessionId) as SessionMessage[];
+}
+
+export function getMessagePage(sessionId: string, options: { before?: string; limit?: number } = {}): MessagePage {
+  const database = initDb();
+  const cap = Math.max(1, Math.min(Math.floor(options.limit ?? 100) || 100, 200));
+  let rows: Array<SessionMessage & { rowid: number }>;
+  if (options.before) {
+    const cursor = database.prepare('SELECT rowid, timestamp FROM messages WHERE session_id = ? AND id = ?')
+      .get(sessionId, options.before) as { rowid: number; timestamp: number } | undefined;
+    if (!cursor) return { messages: [], hasOlder: false };
+    rows = database.prepare(`
+      SELECT rowid, id, role, content, timestamp FROM messages
+      WHERE session_id = ? AND (timestamp < ? OR (timestamp = ? AND rowid < ?))
+      ORDER BY timestamp DESC, rowid DESC LIMIT ?
+    `).all(sessionId, cursor.timestamp, cursor.timestamp, cursor.rowid, cap + 1) as typeof rows;
+  } else {
+    rows = database.prepare(`
+      SELECT rowid, id, role, content, timestamp FROM messages
+      WHERE session_id = ? ORDER BY timestamp DESC, rowid DESC LIMIT ?
+    `).all(sessionId, cap + 1) as typeof rows;
+  }
+  const hasOlder = rows.length > cap;
+  const pageRows = (hasOlder ? rows.slice(0, cap) : rows).reverse();
+  return { messages: pageRows.map(({ rowid: _rowid, ...message }) => message), hasOlder };
+}
+
+export function getMessageWindow(sessionId: string, anchorId: string, radius = 50): MessageWindow {
+  const database = initDb();
+  const cap = Math.max(1, Math.min(Math.floor(radius) || 50, 100));
+  const anchor = database.prepare('SELECT rowid, timestamp FROM messages WHERE session_id = ? AND id = ?')
+    .get(sessionId, anchorId) as { rowid: number; timestamp: number } | undefined;
+  if (!anchor) return { messages: [], hasOlder: false, hasNewer: false, anchorFound: false };
+
+  const olderAndAnchor = database.prepare(`
+    SELECT rowid, id, role, content, timestamp FROM messages
+    WHERE session_id = ? AND (timestamp < ? OR (timestamp = ? AND rowid <= ?))
+    ORDER BY timestamp DESC, rowid DESC LIMIT ?
+  `).all(sessionId, anchor.timestamp, anchor.timestamp, anchor.rowid, cap + 2) as Array<SessionMessage & { rowid: number }>;
+  const newer = database.prepare(`
+    SELECT rowid, id, role, content, timestamp FROM messages
+    WHERE session_id = ? AND (timestamp > ? OR (timestamp = ? AND rowid > ?))
+    ORDER BY timestamp ASC, rowid ASC LIMIT ?
+  `).all(sessionId, anchor.timestamp, anchor.timestamp, anchor.rowid, cap + 1) as Array<SessionMessage & { rowid: number }>;
+
+  const hasOlder = olderAndAnchor.length > cap + 1;
+  const hasNewer = newer.length > cap;
+  const before = (hasOlder ? olderAndAnchor.slice(0, cap + 1) : olderAndAnchor).reverse();
+  const after = hasNewer ? newer.slice(0, cap) : newer;
+  return {
+    messages: [...before, ...after].map(({ rowid: _rowid, ...message }) => message),
+    hasOlder,
+    hasNewer,
+    anchorFound: true,
+  };
+}
+
+export interface MessageSearchResult {
+  messageId: string;
+  sessionId: string;
+  snippet: string;
+  role: string;
+  timestamp: number;
+  employee: string | null;
+  engine: string | null;
+}
+
+function sanitizeFtsQuery(query: string): string {
+  return query
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .split(/\s+/)
+    .map((token) => token.replace(/"/g, ''))
+    .filter(Boolean)
+    .map((token) => `"${token}"`)
+    .join(' ');
+}
+
+export function searchMessages(
+  query: string,
+  limit = 20,
+  filter: { sessionId?: string; employee?: string; engine?: string; role?: 'user' | 'assistant' } = {},
+): MessageSearchResult[] {
+  const database = initDb();
+  if (!ftsAvailable) return [];
+  void scheduleFtsBackfill(database);
+  const match = sanitizeFtsQuery(query);
+  if (!match) return [];
+  const cap = Math.max(1, Math.min(Math.floor(limit) || 20, 200));
+  const conditions: string[] = [];
+  const values: unknown[] = [];
+  if (filter.sessionId) { conditions.push('m.session_id = ?'); values.push(filter.sessionId); }
+  if (filter.employee) { conditions.push('LOWER(s.employee) = ?'); values.push(filter.employee.toLowerCase()); }
+  if (filter.engine) { conditions.push('LOWER(s.engine) = ?'); values.push(filter.engine.toLowerCase()); }
+  if (filter.role) { conditions.push('m.role = ?'); values.push(filter.role); }
+  const extra = conditions.length ? ` AND ${conditions.join(' AND ')}` : '';
+  try {
+    return database.prepare(`
+      SELECT m.id AS messageId, m.session_id AS sessionId,
+             snippet(messages_fts, 0, '«', '»', '…', 12) AS snippet,
+             m.role AS role, m.timestamp AS timestamp,
+             s.employee AS employee, s.engine AS engine
+      FROM messages_fts
+      JOIN messages m ON m.rowid = messages_fts.rowid
+      LEFT JOIN sessions s ON s.id = m.session_id
+      WHERE messages_fts MATCH ?${extra}
+      ORDER BY messages_fts.rank, m.timestamp DESC, m.rowid DESC LIMIT ?
+    `).all(match, ...values, cap) as MessageSearchResult[];
+  } catch (err) {
+    if (String(err).includes('no such table')) return [];
+    throw err;
+  }
 }
 
 export interface QueueItem {

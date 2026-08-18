@@ -27,6 +27,7 @@ import {
   readPortalName,
   buildTemplateReplacements,
 } from "../shared/templateReplacements.js";
+import { ensureOwnerOnlyDirectory } from "../shared/owner-only.js";
 
 const GREEN = "\x1b[32m";
 const YELLOW = "\x1b[33m";
@@ -350,7 +351,9 @@ export async function runSetup(opts?: { force?: boolean }): Promise<void> {
   console.log("");
   const created: string[] = [];
 
-  if (ensureDir(JINN_HOME)) created.push(JINN_HOME);
+  const homePermission = ensureOwnerOnlyDirectory(JINN_HOME);
+  if (homePermission.warning) warn(`インスタンスディレクトリの権限を制限できませんでした: ${homePermission.warning}`);
+  if (homePermission.changed) created.push(JINN_HOME);
 
   // Copy or create config files
   const templateConfig = path.join(TEMPLATE_DIR, "config.yaml");

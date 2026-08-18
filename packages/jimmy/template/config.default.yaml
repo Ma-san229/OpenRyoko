@@ -20,6 +20,9 @@ engines:
     # Default false = headless `claude -p`. sshHost employees keep using `-p`.
     # interactive: false
     # maxLivePtys: 8   # max simultaneously-live PTYs (LRU-evicted) when interactive
+    # DANGEROUS: approves every unambiguous Claude safety prompt, including
+    # destructive shell commands. Keep false unless the instance is isolated.
+    # autoApproveSafetyPrompts: false
   codex:
     bin: codex
     # GPT-5.6 の3ティア: gpt-5.6-sol(上) / gpt-5.6-terra(中) / gpt-5.6-luna(小)

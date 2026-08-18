@@ -2,6 +2,44 @@
 
 > **バージョン体系について**: 2026.4.26 から日付ベース (`YYYY.M.D`) のCalVerに移行しました。npm semver の制約上、月・日の leading zero は付けません (例: 4月26日 → `2026.4.26`)。
 
+## [2026.8.17] - 2026-08-17
+
+> Jinn v0.10〜v0.30 の改善を OpenRyoko の既存設計へ選別統合し、モデル設定をベンダー／モデル選択とカスタム入力の両方に対応したリリース。
+
+### このリリースでできるようになったこと
+
+- **用途に合わせてAIを選べる**: 通常の会話、Slackの空気読み、Goal判定ごとに、ベンダーとモデルを画面から選択できる。一覧にないモデルもIDを手入力して利用可能。
+- **外出先から安全に使える**: OpenRyokoをネットワーク公開する場合に、端末ごとの認証・ペアリング・アクセス解除を利用できる。
+- **長い会話から必要な情報を見つけやすい**: 過去メッセージの検索、検索結果への直接移動、古い履歴の追加読み込みに対応。
+- **長時間の作業を安心して任せられる**: Claudeの長時間セッションや再接続を安定化し、再起動後も作業画面を復元。データの自動バックアップと容量監視も追加。
+- **Slackの短い承認で、そのまま作業を続けられる**: `GO`、`はい`、`OK`、`了解`、`続けて`、`✅`などをReactionだけで終わらせず、依頼の続きとして処理する。
+- **Claudeの利用状況を確認できる**: Dashboardから5時間・7日間の利用状況を確認できる。
+
+### Features
+- **モデル選択 UI の刷新**: デフォルトモデルは Anthropic / OpenAI / Google、空気読みトリアージと Goal 判定は対応する Anthropic / OpenAI からベンダーとモデルを個別選択できる。すべてカスタムモデル ID の手入力と「自動」への復帰に対応し、ネイティブ label・focus・keyboard 操作も整備。
+- **ネットワーク公開時の認証**: bearer/device auth、5分・単回使用の pairing code、browser device revoke、Host / Origin 防御を追加。loopback の従来操作は維持し、instance ごとに認証状態を分離。
+- **長期セッションの履歴操作**: session/activity の cursor pagination、message の timestamp+rowid paging、FTS5 検索、検索結果への message anchor、旧履歴の段階読込に対応。
+- **耐久性と運用ヘルス**: SQLite online backup（日次・7世代）、書込前の空き容量判定、status の storage health、上限付きログローテーション、機密値の redact、home/config の権限強制を追加。
+- **Durable PTY と権限プロンプト**: 256 KiB・atomic 保存の scrollback snapshot、再起動後の復元、明示 opt-in の自動承認、曖昧な権限入力の拒否を追加。
+- **Claude usage 表示**: OAuth usage API の 5h / 7d / model-scoped bucket を Dashboard に投影し、token と provider error は外部へ公開しない。
+
+### Reliability / Fixes
+- **Slack Reaction がタスク継続指示を飲み込む問題**: DM／DM相当会話のreact-only候補を、純粋な感謝・会話終了表現へ決定論的に限定。`GO`、`はい`、`OK`、`了解`、`続けて`、`お願いします`や承認系emojiは通常セッションへ渡し、直前がbot発言の場合もReaction判定を上書きしてタスク停止を防止。
+- **Claude PTY の長時間ターン安定化**: 実モデルの context / auto-compact 上限を反映し、`UserPromptSubmit` 未確認時の Enter 再送、添付パスの保護、無活動 stall 判定、suggestion/reasoning metadata 除去を追加。
+- **正確なターン会計**: 累積 transcript から今回ターン分だけを差分算出し、Web / connector / fallback / retry の各経路で一度だけ計上。
+- **SSE proxy の再利用と回復**: PTY 単位の keep-alive pool、停止時 cleanup、応答前 socket error の backoff 付き再試行を追加。
+- **Codex と Web API の入力境界**: positional argument に `--` fence、メッセージ本文にサイズ・空白検証を追加。
+- **interactive PTY のレース修正**: stale hook、PTY death、permission pending、shutdown 時の snapshot flush、復元済み buffer reset の競合を解消。
+
+### Verification
+- backend: **85 test files / 732 tests pass**
+- Web: **11 test files / 82 tests pass**
+- backend / Web の TypeScript typecheck、production build、`git diff --check` 成功
+- Claude CLI によるレビューを2巡し、最終競合指摘まで回帰テスト化
+- `openclaw-sandbox` で実機デプロイし、OpenRyoko API、Slack Socket Mode、OpenClaw Gateway、Dashboard の正常稼働を確認
+
+**Breaking changes**: なし。
+
 ## [2026.8.6] - 2026-08-04
 
 > 2026.8.5 の実機検証で発見した誤警報のホットフィックス。
