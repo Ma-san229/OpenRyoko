@@ -2,6 +2,44 @@
 
 > **バージョン体系について**: 2026.4.26 から日付ベース (`YYYY.M.D`) のCalVerに移行しました。npm semver の制約上、月・日の leading zero は付けません (例: 4月26日 → `2026.4.26`)。
 
+## [2026.8.18] - 2026-08-18
+
+> 2026.8.17 の公開後監査で見つかった依存脆弱性と、ネットワーク公開時の認証境界を修正したセキュリティリリース。
+
+### このリリースで安全になったこと
+
+- **WhatsApp / Telegramの既知Critical依存を解消**: Baileysを修正版へ更新し、Telegramを依存ゼロの公式v2 APIへ移行。送受信・返信・編集・typingの既存動作は維持。
+- **依存監査をゼロ件まで改善**: production依存の `pnpm audit` で critical / high / moderate / low がすべて0件。
+- **外部公開時に稼働情報を見せない**: `/api/status`も端末認証の対象にし、モデル、コネクタ、セッション数、空き容量の未認証取得を防止。
+- **監視は情報を出さず継続可能**: 認証不要の `/api/health` は `{ "ok": true }` だけを返し、Dockerや外形監視の生存確認に利用可能。
+- **端末認証がサーバー側でも30日で失効**: Cookieだけでなく保存済み端末セッションにも有効期限を持たせ、盗まれたCookieが無期限に使われないよう修正。
+- **ペアリング総当たりとディスクI/O攻撃を抑止**: 送信元ごとに5分間10回までに制限し、存在しないコードでは認証ファイルを書き換えない。
+- **ワイルドカードbindでも任意Hostを信用しない**: `0.0.0.0` / `::` は実際のローカルNIC、loopback、`gateway.allowedHosts`に限定。DNS rebinding耐性を維持。
+- **プロキシヘッダーを二重の明示設定時だけ信頼**: `gateway.trustProxyHeaders: true`に加え、接続元が`gateway.trustedProxyAddresses`に一致する場合だけ転送ヘッダーを利用。
+- **静的ファイル配信の境界を厳密化**: 名前が似た隣接ディレクトリへ抜けられないよう、実ディレクトリ境界で検証。
+- **npm公開物を最小化**: 実行に不要なテストコードとテスト用fixtureをproduction buildから除外。
+
+### 外部公開している場合の設定
+
+- 平文HTTPでインターネットへ直接公開せず、Tailscale/VPNまたはHTTPSリバースプロキシを利用する。
+- リバースプロキシの公開名を `gateway.allowedHosts` に追加する。
+- `gateway.trustProxyHeaders: true`を設定し、信頼するプロキシの接続元IPを`gateway.trustedProxyAddresses`に追加する。
+- LANの実IPで直接利用する場合は自動許可されるため、追加設定は不要。
+
+### 互換性に関する注意
+
+- `/api/status`を直接監視していた場合は、Bearer認証を付けるか、情報を返さない`/api/health`へ切り替える。
+- 30日より前に作成された既存の端末セッションは失効するため、必要に応じて再ペアリングする。
+
+### Verification
+
+- Backend: **89 test files / 747 tests pass**
+- Web: **11 test files / 82 tests pass**
+- backend / WebのTypeScript typecheck、production build、`git diff --check`
+- production依存監査: 0 vulnerabilities
+- npm公開物のsecret・秘密鍵・個人絶対パス走査
+- Claude CLIによる独立セキュリティレビュー
+
 ## [2026.8.17] - 2026-08-17
 
 > Jinn v0.10〜v0.30 の改善を OpenRyoko の既存設計へ選別統合し、モデル設定をベンダー／モデル選択とカスタム入力の両方に対応したリリース。
@@ -36,7 +74,7 @@
 - Web: **11 test files / 82 tests pass**
 - backend / Web の TypeScript typecheck、production build、`git diff --check` 成功
 - Claude CLI によるレビューを2巡し、最終競合指摘まで回帰テスト化
-- `openclaw-sandbox` で実機デプロイし、OpenRyoko API、Slack Socket Mode、OpenClaw Gateway、Dashboard の正常稼働を確認
+- 隔離された実行環境へデプロイし、OpenRyoko API、Slack Socket Mode、OpenClaw Gateway、Dashboard の正常稼働を確認
 
 **Breaking changes**: なし。
 

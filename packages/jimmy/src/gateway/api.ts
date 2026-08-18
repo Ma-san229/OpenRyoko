@@ -73,6 +73,7 @@ import {
   currentDeviceId,
   issuePairingCode,
   listAuthSessions,
+  requestIsSecure,
   revokeAuthSession,
   shouldRequireGatewayAuth,
   verifyGatewayAuth,
@@ -80,10 +81,14 @@ import {
 import { getDiskSpaceStatus } from "../shared/storage-health.js";
 import { ptySnapshotStore } from "../engines/pty-snapshot.js";
 import { collectClaudeUsage } from "../shared/claude-usage.js";
+import { PairingAttemptLimiter, pairingAttemptKey } from "./pairing-rate-limit.js";
 
 /** Max bytes accepted on /api/internal/hook (loopback-only relay payloads are tiny). */
 const HOOK_BODY_MAX_BYTES = 64 * 1024;
 const PAIR_BODY_MAX_BYTES = 1024;
+const PAIR_ATTEMPT_WINDOW_MS = 5 * 60_000;
+const pairingAttempts = new PairingAttemptLimiter(10, PAIR_ATTEMPT_WINDOW_MS);
+const pairingGlobalAttempts = new PairingAttemptLimiter(1_000, PAIR_ATTEMPT_WINDOW_MS, 1);
 
 export interface ApiContext {
   config: JinnConfig;
@@ -447,7 +452,7 @@ function serializeSession(session: Session, context: ApiContext): Session {
 
 function checkInstanceHealth(port: number): Promise<boolean> {
   return new Promise((resolve) => {
-    const req = http.request({ hostname: "localhost", port, path: "/api/status", timeout: 2000 }, (res) => {
+    const req = http.request({ hostname: "localhost", port, path: "/api/health", timeout: 2000 }, (res) => {
       resolve(res.statusCode === 200);
       res.resume();
     });
@@ -517,6 +522,12 @@ export async function handleApiRequest(
       return json(res, { ok: result.status === 200 }, result.status);
     }
 
+    // Minimal unauthenticated liveness probe. Do not add runtime metadata here.
+    if (method === "GET" && pathname === "/api/health") {
+      res.setHeader("Cache-Control", "no-store");
+      return json(res, { ok: true });
+    }
+
     // GET /api/status
     if (method === "GET" && pathname === "/api/status") {
       const config = context.getConfig();
@@ -525,6 +536,7 @@ export async function handleApiRequest(
       const connectors = Object.fromEntries(
         Array.from(context.connectors.values()).map((connector) => [connector.name, connector.getHealth()]),
       );
+      res.setHeader("Cache-Control", "no-store");
       return json(res, {
         status: "ok",
         uptime: Math.floor((Date.now() - context.startTime) / 1000),
@@ -559,6 +571,7 @@ export async function handleApiRequest(
       const authenticated = Boolean(
         context.authToken && context.authHome && verifyGatewayAuth(req.headers, context.authToken, context.authHome),
       );
+      res.setHeader("Cache-Control", "no-store");
       return json(res, {
         authRequired,
         authenticated,
@@ -575,15 +588,22 @@ export async function handleApiRequest(
       if (!context.authHome) return json(res, { error: "Auth is not configured" }, 503);
       const parsed = await readJsonBody(req, res, PAIR_BODY_MAX_BYTES);
       if (!parsed.ok) return;
+      const gateway = context.getConfig().gateway;
+      const trustProxyHeaders = gateway.trustProxyHeaders === true;
+      const trustedProxyAddresses = gateway.trustedProxyAddresses ?? [];
+      const attemptKey = pairingAttemptKey(req, trustProxyHeaders, trustedProxyAddresses);
+      if (!pairingAttempts.claim(attemptKey) || !pairingGlobalAttempts.claim("global")) {
+        res.setHeader("Retry-After", String(Math.ceil(PAIR_ATTEMPT_WINDOW_MS / 1_000)));
+        return json(res, { error: "Too many pairing attempts" }, 429);
+      }
       const code = (parsed.body as { code?: unknown }).code;
       if (typeof code !== "string" || !consumePairingCode(context.authHome, code)) {
         return json(res, { error: "Invalid or expired pairing code" }, 401);
       }
       const session = createAuthSession(context.authHome, req);
-      const forwardedProto = Array.isArray(req.headers["x-forwarded-proto"])
-        ? req.headers["x-forwarded-proto"][0]
-        : req.headers["x-forwarded-proto"];
-      const secure = forwardedProto?.split(",", 1)[0]?.trim().toLowerCase() === "https";
+      pairingAttempts.clear(attemptKey);
+      const secure = requestIsSecure(req, trustProxyHeaders, trustedProxyAddresses);
+      res.setHeader("Cache-Control", "no-store");
       res.setHeader("Set-Cookie", authCookieHeaders(session.secret, session.id, context.authHome, secure));
       return json(res, { status: "ok" });
     }
@@ -615,10 +635,12 @@ export async function handleApiRequest(
     if (method === "GET" && pathname === "/api/instances") {
       const instances = loadInstances();
       const currentPort = context.getConfig().gateway.port || 7777;
-      const forwardedProto = Array.isArray(req.headers["x-forwarded-proto"])
-        ? req.headers["x-forwarded-proto"][0]
-        : req.headers["x-forwarded-proto"];
-      const protocol = forwardedProto?.split(",", 1)[0]?.trim() === "https" ? "https" : "http";
+      const gateway = context.getConfig().gateway;
+      const protocol = requestIsSecure(
+        req,
+        gateway.trustProxyHeaders === true,
+        gateway.trustedProxyAddresses ?? [],
+      ) ? "https" : "http";
       let requestHostname = "localhost";
       try { requestHostname = new URL(`${protocol}://${req.headers.host || "localhost"}`).hostname; } catch { /* fallback */ }
       const urlHost = requestHostname.includes(":") ? `[${requestHostname}]` : requestHostname;

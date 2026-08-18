@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   AUTH_COOKIE,
   AUTH_DEVICE_COOKIE,
+  AUTH_SESSION_TTL_MS,
   authCookieHeaders,
   authCookieName,
   authDeviceCookieName,
@@ -12,8 +13,10 @@ import {
   consumePairingCode,
   createAuthSession,
   ensureGatewayAuthToken,
+  gatewayRequestNeedsAuth,
   isLoopbackHost,
   issuePairingCode,
+  requestIsSecure,
   shouldRequireGatewayAuth,
   validateGatewayExposure,
   verifyGatewayAuth,
@@ -45,12 +48,18 @@ describe("gateway auth security", () => {
     } }).ok).toBe(true);
   });
 
-  it("leaves only state, pairing redemption, status and the separately secured hook public", () => {
+  it("leaves only auth bootstrap routes and the separately secured hook public", () => {
+    expect(authRequiredForRequest("GET", "/api/health")).toBe(false);
     expect(authRequiredForRequest("GET", "/api/auth/state")).toBe(false);
     expect(authRequiredForRequest("POST", "/api/auth/pair")).toBe(false);
     expect(authRequiredForRequest("POST", "/api/internal/hook")).toBe(false);
+    expect(authRequiredForRequest("GET", "/api/status")).toBe(true);
     expect(authRequiredForRequest("GET", "/api/sessions")).toBe(true);
     expect(authRequiredForRequest("GET", "/ws/pty/id")).toBe(true);
+    expect(gatewayRequestNeedsAuth(false, "POST", "/api/auth/pairing-codes")).toBe(true);
+    expect(gatewayRequestNeedsAuth(false, "GET", "/api/auth/devices")).toBe(true);
+    expect(gatewayRequestNeedsAuth(true, "GET", "/api/status")).toBe(true);
+    expect(gatewayRequestNeedsAuth(true, "GET", "/api/health")).toBe(false);
   });
 
   it("uses hashed, expiring, single-use pairing codes", () => {
@@ -59,7 +68,29 @@ describe("gateway auth security", () => {
     const onDisk = fs.readFileSync(path.join(home, "pairing-codes.json"), "utf8");
     expect(onDisk).not.toContain(issued.code);
     expect(consumePairingCode(home, issued.code.toLowerCase().replaceAll("-", " "), 2_000)).toBe(true);
+    const consumedState = fs.readFileSync(path.join(home, "pairing-codes.json"), "utf8");
     expect(consumePairingCode(home, issued.code, 2_001)).toBe(false);
+    expect(fs.readFileSync(path.join(home, "pairing-codes.json"), "utf8")).toBe(consumedState);
+  });
+
+  it("expires browser sessions on the server as well as in the cookie", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "ryoko-auth-expiry-"));
+    const token = ensureGatewayAuthToken(home);
+    const session = createAuthSession(home, request(), 1_000);
+    const cookies = authCookieHeaders(session.secret, session.id, home)
+      .map((header) => header.split(";", 1)[0])
+      .join("; ");
+    expect(verifyGatewayAuth({ cookie: cookies }, token, home, 1_000 + AUTH_SESSION_TTL_MS - 1)).toBe(true);
+    expect(verifyGatewayAuth({ cookie: cookies }, token, home, 1_000 + AUTH_SESSION_TTL_MS)).toBe(false);
+  });
+
+  it("trusts forwarded HTTPS only when proxy headers are explicitly enabled", () => {
+    const proxied = request({ "x-forwarded-proto": "https" });
+    expect(requestIsSecure(proxied, false)).toBe(false);
+    expect(requestIsSecure(proxied, true)).toBe(false);
+    expect(requestIsSecure(proxied, true, ["127.0.0.1"])).toBe(true);
+    const directTls = { headers: {}, socket: { encrypted: true } } as never;
+    expect(requestIsSecure(directTls, false)).toBe(true);
   });
 
   it("accepts timing-safe bearer auth and hashed browser sessions", () => {

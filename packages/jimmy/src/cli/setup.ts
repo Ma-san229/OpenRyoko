@@ -236,6 +236,9 @@ const DEFAULT_CONFIG = `jinn:
 gateway:
   port: 7777
   host: "127.0.0.1"
+  # allowedHosts: ["ryoko.example.com"]
+  # trustProxyHeaders: false
+  # trustedProxyAddresses: ["127.0.0.1"]
 engines:
   default: claude
   claude:
