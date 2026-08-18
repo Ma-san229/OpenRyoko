@@ -4,7 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { runJobMonitor } from "../monitor.js";
-import { readJobState, writeJobState, type JobState } from "../state.js";
+import { isPidAlive, readJobState, writeJobState, type JobState } from "../state.js";
 
 /**
  * Integration: the monitor runs a real `/bin/sh` command, captures the log,
@@ -120,20 +120,30 @@ describe("runJobMonitor", () => {
   });
 
   it("timeout kills the whole process tree, not just the shell", async () => {
-    const marker = `sleep 61.234`;
-    seedJob({ command: `${marker} & ${marker} & wait`, timeoutSec: 1 });
+    const childPidsFile = path.join(dir, "child-pids.txt");
+    const marker = "sleep 61.234";
+    seedJob({
+      command: `${marker} & echo $! >> ${JSON.stringify(childPidsFile)}; ${marker} & echo $! >> ${JSON.stringify(childPidsFile)}; wait`,
+      timeoutSec: 1,
+    });
     const final = await runJobMonitor("j1", { jobsDir: dir, retryDelaysMs: [10] });
 
     expect(final?.timedOut).toBe(true);
-    // The backgrounded sleeps shared the job's process group — none survive.
-    const { execSync } = await import("node:child_process");
-    let survivors = "";
-    try {
-      survivors = execSync(`pgrep -f "${marker}" || true`, { encoding: "utf8" }).trim();
-    } catch {
-      survivors = "";
+    const childPids = fs.readFileSync(childPidsFile, "utf8")
+      .trim()
+      .split("\n")
+      .map(Number)
+      .filter(Number.isInteger);
+    expect(childPids).toHaveLength(2);
+
+    // Check the exact child PIDs rather than `pgrep -f <marker>`. On Linux,
+    // pgrep can match the wrapper shell whose argv contains the marker and
+    // report a false survivor. Allow init a short window to reap killed jobs.
+    const deadline = Date.now() + 3_000;
+    while (childPids.some(isPidAlive) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
     }
-    expect(survivors).toBe("");
+    expect(childPids.filter(isPidAlive)).toEqual([]);
   }, 20_000);
 
   it("never re-runs a job a dead monitor already claimed (its child may still be alive)", async () => {
