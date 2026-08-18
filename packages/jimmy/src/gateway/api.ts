@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import yaml from "js-yaml";
+import cron from "node-cron";
 import type { CronJob, Engine, IncomingMessage, JinnConfig, Session, Target } from "../shared/types.js";
 import { isInterruptibleEngine } from "../shared/types.js";
 import type { SessionManager } from "../sessions/manager.js";
@@ -57,6 +58,7 @@ import { getClaudeExpectedResetAt, recordClaudeRateLimit } from "../shared/usage
 import { loadJobs, saveJobs } from "../cron/jobs.js";
 import { reloadScheduler } from "../cron/scheduler.js";
 import { runCronJob } from "../cron/runner.js";
+import { checkForUpdates } from "../updates/checker.js";
 import QRCode from "qrcode";
 import { WhatsAppConnector } from "../connectors/whatsapp/index.js";
 import { handleFilesRequest, ensureFilesDir } from "./files.js";
@@ -554,6 +556,14 @@ export async function handleApiRequest(
         connectors,
         storage: getDiskSpaceStatus(),
       });
+    }
+
+    // GET /api/update — fixed-origin npm registry check with a shared cache.
+    // `refresh=1` is used only by an explicit user action; normal dashboard
+    // loads reuse the six-hour cache to avoid unnecessary external traffic.
+    if (method === "GET" && pathname === "/api/update") {
+      res.setHeader("Cache-Control", "no-store");
+      return json(res, await checkForUpdates({ force: url.searchParams.get("refresh") === "1" }));
     }
 
     // Live Claude subscription buckets, including model-scoped weekly limits.
@@ -1206,11 +1216,16 @@ export async function handleApiRequest(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const body = _parsed.body as any;
       const jobs = loadJobs();
+      const newJobId = typeof body.id === "string" && body.id.trim() ? body.id.trim() : crypto.randomUUID();
+      if (jobs.some((job) => job.id === newJobId)) {
+        return json(res, { error: `Cron job id already exists: ${newJobId}` }, 409);
+      }
       const newJob: CronJob = {
-        id: body.id || crypto.randomUUID(),
+        id: newJobId,
         name: body.name || "untitled",
         enabled: body.enabled ?? true,
         schedule: body.schedule || "0 * * * *",
+        kind: body.kind === "update-notification" ? "update-notification" : "prompt",
         timezone: body.timezone,
         engine: body.engine,
         model: body.model,
@@ -1218,6 +1233,16 @@ export async function handleApiRequest(
         prompt: body.prompt || "",
         delivery: body.delivery,
       };
+      if (newJob.kind === "update-notification") {
+        if (!cron.validate(newJob.schedule)) return badRequest(res, "Invalid cron schedule");
+        if (newJob.enabled && (
+          !newJob.delivery ||
+          typeof newJob.delivery.connector !== "string" || !newJob.delivery.connector.trim() ||
+          typeof newJob.delivery.channel !== "string" || !newJob.delivery.channel.trim()
+        )) {
+          return badRequest(res, "Enabled update notifications require a delivery connector and channel");
+        }
+      }
       jobs.push(newJob);
       saveJobs(jobs);
       reloadScheduler(jobs);
@@ -1234,7 +1259,21 @@ export async function handleApiRequest(
       if (!_parsed.ok) return;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const body = _parsed.body as any;
-      jobs[idx] = { ...jobs[idx], ...body, id: params.id };
+      const updated = { ...jobs[idx], ...body, id: params.id } as CronJob;
+      if (updated.kind !== undefined && updated.kind !== "prompt" && updated.kind !== "update-notification") {
+        return badRequest(res, "Invalid cron job kind");
+      }
+      if (updated.kind === "update-notification") {
+        if (!cron.validate(updated.schedule)) return badRequest(res, "Invalid cron schedule");
+        if (updated.enabled && (
+          !updated.delivery ||
+          typeof updated.delivery.connector !== "string" || !updated.delivery.connector.trim() ||
+          typeof updated.delivery.channel !== "string" || !updated.delivery.channel.trim()
+        )) {
+          return badRequest(res, "Enabled update notifications require a delivery connector and channel");
+        }
+      }
+      jobs[idx] = updated;
       saveJobs(jobs);
       reloadScheduler(jobs);
       return json(res, jobs[idx]);

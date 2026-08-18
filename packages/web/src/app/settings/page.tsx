@@ -11,6 +11,7 @@ import type { ThemeId } from "@/lib/themes"
 import { api } from "@/lib/api"
 import { EmojiPicker } from "@/components/ui/emoji-picker"
 import { ModelSelector } from "@/components/settings/model-selector"
+import { UpdateNotificationSettings } from "@/components/settings/update-notification-settings"
 import {
   MODEL_VENDORS,
   TRIAGE_MODEL_VENDORS,
@@ -227,6 +228,21 @@ interface Config {
     operatorName?: string
   }
   [key: string]: unknown
+}
+
+function configuredConnectorIds(config: Config): string[] {
+  const ids = new Set<string>()
+  for (const [name, value] of Object.entries(config.connectors ?? {})) {
+    if (name === "instances" || name === "web" || !value || typeof value !== "object") continue
+    ids.add(name)
+  }
+  for (const instance of config.connectors?.instances ?? []) {
+    if (instance.id) ids.add(instance.id)
+  }
+  if (config.cron?.defaultDelivery?.connector && config.cron.defaultDelivery.connector !== "web") {
+    ids.add(config.cron.defaultDelivery.connector)
+  }
+  return Array.from(ids).sort()
 }
 
 // ---------------------------------------------------------------------------
@@ -2287,6 +2303,11 @@ export default function SettingsPage() {
                     />
                   </FieldRow>
                 )}
+                <UpdateNotificationSettings
+                  connectorOptions={configuredConnectorIds(config)}
+                  defaultConnector={config.cron?.defaultDelivery?.connector}
+                  defaultChannel={config.cron?.defaultDelivery?.channel}
+                />
               </Section>
 
               {/* -- Section 7: Logging -- */}

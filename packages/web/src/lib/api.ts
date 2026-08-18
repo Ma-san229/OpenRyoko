@@ -68,6 +68,16 @@ export interface ClaudeUsageResponse {
   unavailableReason?: 'disabled' | 'no-oauth-credentials' | 'provider-unavailable'
 }
 
+export interface UpdateStatusResponse {
+  currentVersion: string
+  latestVersion: string | null
+  updateAvailable: boolean
+  checkedAt: string
+  releaseUrl: string | null
+  stale: boolean
+  error?: 'registry-unavailable' | 'invalid-registry-response'
+}
+
 export interface Employee {
   name: string;
   displayName: string;
@@ -171,6 +181,8 @@ interface UploadedFile {
 
 export const api = {
   getStatus: () => get<Record<string, unknown>>("/api/status"),
+  getUpdateStatus: (refresh = false) =>
+    get<UpdateStatusResponse>(`/api/update${refresh ? "?refresh=1" : ""}`),
   getClaudeUsage: () => get<ClaudeUsageResponse>("/api/usage/claude"),
   getSessions: () => get<Record<string, unknown>[]>("/api/sessions"),
   getSessionPage: (cursor?: string, limit = 100) => {
@@ -217,6 +229,8 @@ export const api = {
   resetSession: (id: string) =>
     post<{ status: string; sessionId: string }>(`/api/sessions/${id}/reset`, {}),
   getCronJobs: () => get<Record<string, unknown>[]>("/api/cron"),
+  createCronJob: (data: Record<string, unknown>) =>
+    post<Record<string, unknown>>("/api/cron", data),
   getCronRuns: (id: string) => get<Record<string, unknown>[]>(`/api/cron/${id}/runs`),
   updateCronJob: (id: string, data: Record<string, unknown>) =>
     put<Record<string, unknown>>(`/api/cron/${id}`, data),

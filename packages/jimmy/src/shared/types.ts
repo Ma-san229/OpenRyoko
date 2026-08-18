@@ -205,6 +205,9 @@ export interface CronJob {
   name: string;
   enabled: boolean;
   schedule: string;
+  /** Normal jobs always invoke the AI. Update notifications first perform a
+   * deterministic npm registry check and invoke the AI only for a new release. */
+  kind?: "prompt" | "update-notification";
   timezone?: string;
   engine?: string;
   model?: string;

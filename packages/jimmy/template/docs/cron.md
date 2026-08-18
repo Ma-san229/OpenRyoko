@@ -10,6 +10,7 @@ interface CronJob {
   name: string;          // Human-readable name
   enabled: boolean;      // Whether the job is active
   schedule: string;      // Cron expression (standard 5-field)
+  kind?: "prompt" | "update-notification"; // Default: prompt
   timezone?: string;     // IANA timezone (default: system timezone)
   engine: string;        // "claude" or "codex"
   model?: string;        // Override default model
@@ -21,6 +22,12 @@ interface CronJob {
   };
 }
 ```
+
+`kind: "update-notification"` is a built-in low-cost update watcher. It checks
+the fixed OpenRyoko npm registry endpoint on schedule without invoking an AI.
+Only when a newer, not-yet-notified version exists does it ask the configured
+engine to write a short notice and deliver it to the selected connector. Each
+job notifies a given version once.
 
 ## Schedule Format
 
