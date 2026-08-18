@@ -15,6 +15,7 @@
 - **Claude usage 表示**: OAuth usage API の 5h / 7d / model-scoped bucket を Dashboard に投影し、token と provider error は外部へ公開しない。
 
 ### Reliability / Fixes
+- **Slack Reaction がタスク継続指示を飲み込む問題**: DM／DM相当会話のreact-only候補を、純粋な感謝・会話終了表現へ決定論的に限定。`GO`、`はい`、`OK`、`了解`、`続けて`、`お願いします`や承認系emojiは通常セッションへ渡し、直前がbot発言の場合もReaction判定を上書きしてタスク停止を防止。
 - **Claude PTY の長時間ターン安定化**: 実モデルの context / auto-compact 上限を反映し、`UserPromptSubmit` 未確認時の Enter 再送、添付パスの保護、無活動 stall 判定、suggestion/reasoning metadata 除去を追加。
 - **正確なターン会計**: 累積 transcript から今回ターン分だけを差分算出し、Web / connector / fallback / retry の各経路で一度だけ計上。
 - **SSE proxy の再利用と回復**: PTY 単位の keep-alive pool、停止時 cleanup、応答前 socket error の backoff 付き再試行を追加。
@@ -22,7 +23,7 @@
 - **interactive PTY のレース修正**: stale hook、PTY death、permission pending、shutdown 時の snapshot flush、復元済み buffer reset の競合を解消。
 
 ### Verification
-- backend: **85 test files / 728 tests pass**
+- backend: **85 test files / 732 tests pass**
 - Web: **11 test files / 82 tests pass**
 - backend / Web の TypeScript typecheck、production build、`git diff --check` 成功
 - Claude CLI によるレビューを2巡し、最終競合指摘まで回帰テスト化
