@@ -8,6 +8,7 @@ import { useGateway } from "@/hooks/use-gateway";
 import { useSettings } from "@/app/settings-provider";
 import { PageLayout } from "@/components/page-layout";
 import { useBreadcrumbs } from "@/context/breadcrumb-context";
+import { UpdateNotice } from "@/components/update-notice";
 import {
   Card,
   CardHeader,
@@ -156,6 +157,8 @@ export default function DashboardPage() {
             Gateway overview and live activity
           </p>
         </div>
+
+        <UpdateNotice />
 
         {error && (
           <div

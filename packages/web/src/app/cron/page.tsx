@@ -20,6 +20,7 @@ interface CronJob {
   name: string
   schedule: string
   enabled: boolean
+  kind?: "prompt" | "update-notification"
   timezone?: string
   engine?: string
   model?: string
@@ -33,10 +34,12 @@ interface CronRun {
   id?: string
   ts?: string
   startedAt?: string
+  timestamp?: string
   finishedAt?: string
   status?: string
   durationMs?: number
   error?: string
+  reason?: string
   [key: string]: unknown
 }
 
@@ -116,7 +119,7 @@ function RecentRuns({ jobId }: { jobId: string }) {
       </div>
       <div className="flex flex-col gap-1">
         {runs.map((run, i) => {
-          const ts = run.ts || run.startedAt || ""
+          const ts = run.ts || run.startedAt || run.timestamp || ""
           const status = run.status || "unknown"
           const statusDot =
             status === "success" || status === "ok" ? "var(--system-green)"
@@ -137,6 +140,11 @@ function RecentRuns({ jobId }: { jobId: string }) {
               {run.error && (
                 <span className="truncate text-[var(--system-red)] min-w-0 flex-1">
                   {run.error}
+                </span>
+              )}
+              {!run.error && run.reason && (
+                <span className="truncate text-[var(--text-tertiary)] min-w-0 flex-1">
+                  {run.reason}
                 </span>
               )}
             </div>
@@ -421,6 +429,11 @@ export default function CronPage() {
                                           {job.engine}
                                         </span>
                                       )}
+                                      {job.kind === "update-notification" && (
+                                        <span className="text-[length:var(--text-caption1)] px-2 py-px rounded-xl bg-[color-mix(in_srgb,var(--system-blue)_12%,transparent)] text-[var(--system-blue)]">
+                                          update check
+                                        </span>
+                                      )}
 
                                       {/* Enable/disable toggle */}
                                       <button
@@ -490,6 +503,12 @@ export default function CronPage() {
                                           <>
                                             <span className="text-[length:var(--text-caption1)] text-[var(--text-tertiary)]">Model</span>
                                             <span className="text-[length:var(--text-caption1)] text-[var(--text-secondary)] font-[family-name:var(--font-mono)]">{job.model}</span>
+                                          </>
+                                        )}
+                                        {job.kind === "update-notification" && (
+                                          <>
+                                            <span className="text-[length:var(--text-caption1)] text-[var(--text-tertiary)]">Behavior</span>
+                                            <span className="text-[length:var(--text-caption1)] text-[var(--text-secondary)]">AI runs only for a new, unnotified release</span>
                                           </>
                                         )}
                                       </div>

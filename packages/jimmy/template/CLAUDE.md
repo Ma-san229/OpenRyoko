@@ -268,6 +268,7 @@ provides:                    # オプション — この従業員が組織に�
   "name": "人間向けの名前",
   "enabled": true,
   "schedule": "0 9 * * 1-5",
+  "kind": "prompt",
   "timezone": "Asia/Tokyo",
   "engine": "claude",
   "model": "claude-opus-5",
@@ -281,6 +282,7 @@ provides:                    # オプション — この従業員が組織に�
 ```
 
 - `schedule` は標準cron式（分 時 日 月 曜日）
+- `kind: "update-notification"` はOpenRyokoの更新をAIなしで確認し、新しい未通知バージョンがある時だけAIで通知文を作成する
 - `delivery` はオプション。指定時は指定コネクタ経由で出力を送信
 - 実行ログは `~/.ryoko/cron/runs/` に保存される
 
