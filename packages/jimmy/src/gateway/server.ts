@@ -49,6 +49,7 @@ import { createDailyDatabaseBackup } from "../sessions/backup.js";
 import { getDiskSpaceStatus } from "../shared/storage-health.js";
 import { requestOriginAllowed } from "./request-origin.js";
 import { hostHeaderAllowed, localInterfaceHosts } from "./host-guard.js";
+import { isWildcardBindHost, localGatewayUrl } from "../shared/gateway-url.js";
 import { staticPathWithinRoot } from "./static-path.js";
 
 
@@ -939,8 +940,37 @@ export async function startGateway(
   // `Host` is not loopback, a local interface, or explicitly configured.
   const configuredHost = config.gateway.host || "127.0.0.1";
   const interfaceHosts = localInterfaceHosts();
-  function hostIsAllowed(hostHeader: string | undefined): boolean {
-    return hostHeaderAllowed(hostHeader, configuredHost, currentConfig.gateway.allowedHosts, interfaceHosts);
+  const connectUrl = localGatewayUrl(configuredHost, config.gateway.port || 7777);
+  const configuredAllowedHosts = Array.isArray(currentConfig.gateway.allowedHosts) ? currentConfig.gateway.allowedHosts : [];
+  const ignoredWildcardAllowedHosts = configuredAllowedHosts.filter((host) => isWildcardBindHost(host));
+  if (ignoredWildcardAllowedHosts.length > 0) {
+    logger.warn(
+      `Ignoring wildcard value(s) in gateway.allowedHosts (${ignoredWildcardAllowedHosts.join(", ")}). `
+        + `Wildcard bind addresses are never safe Host allowlist entries; connect to ${connectUrl} instead.`,
+    );
+  }
+  // Publish the *connectable* URL to every child process we spawn (engine CLIs
+  // inherit process.env via buildChildEnv). Skills and scripts should read
+  // $RYOKO_GATEWAY_URL rather than hard-coding a host they can get wrong.
+  process.env.RYOKO_GATEWAY_URL = connectUrl;
+  function hostIsAllowed(req: http.IncomingMessage): boolean {
+    return hostHeaderAllowed(req.headers.host, configuredHost, currentConfig.gateway.allowedHosts, interfaceHosts);
+  }
+
+  // A silent 421 is how this guard bites: a cron script gets an empty body, the
+  // run is still recorded "success", and the Slack post just never happens. Say
+  // out loud what was rejected and what to use instead — but only once per
+  // distinct Host, so a hostile tab in a retry loop can't flood the log.
+  const warnedRejectedHosts = new Set<string>();
+  function warnHostRejected(hostHeader: string | undefined): void {
+    const key = (hostHeader || "<missing>").toLowerCase().replace(/[^\x20-\x7e]/g, "?").slice(0, 200);
+    if (warnedRejectedHosts.has(key)) return;
+    if (warnedRejectedHosts.size >= 50) return;
+    warnedRejectedHosts.add(key);
+    logger.warn(
+      `host_not_allowed: rejected Host="${key}". `
+        + `Connect to ${connectUrl} instead. Real proxy hostnames may be added to gateway.allowedHosts; wildcard bind addresses cannot.`,
+    );
   }
 
   // Create HTTP server
@@ -950,9 +980,15 @@ export async function startGateway(
     // Host header check before anything else — applies to both API and
     // static asset paths so a malicious cross-origin browser tab can't
     // pull session JSON either.
-    if (!hostIsAllowed(req.headers.host)) {
+    if (!hostIsAllowed(req)) {
+      warnHostRejected(req.headers.host);
       res.writeHead(421, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "host_not_allowed" }));
+      res.end(JSON.stringify({
+        error: "host_not_allowed",
+        host: req.headers.host ?? null,
+        hint: `Use ${connectUrl} — "${configuredHost}" is the bind address, not a connectable host. `
+          + `Real proxy hostnames may be added to gateway.allowedHosts; wildcard bind addresses cannot.`,
+      }));
       return;
     }
 
@@ -1035,7 +1071,7 @@ export async function startGateway(
     const reqUrl = req.url || "";
     // DNS-rebinding / cross-host guard — mirror the HTTP request path so a WS
     // upgrade can't bypass it. Applies to both /ws and /ws/pty.
-    if (!hostIsAllowed(req.headers.host)) { socket.destroy(); return; }
+    if (!hostIsAllowed(req)) { warnHostRejected(req.headers.host); socket.destroy(); return; }
     if (!requestOriginAllowed(req.headers.origin, req.headers.host, configuredHost)) { socket.destroy(); return; }
     if (authRequired && !verifyGatewayAuth(req.headers, authToken, JINN_HOME)) { socket.destroy(); return; }
     if (reqUrl === "/ws") {
@@ -1175,7 +1211,12 @@ export async function startGateway(
       reject(err);
     });
     server.listen(port, host, () => {
-      logger.info(`${gatewayName} gateway listening on http://${host}:${port} (boot ${bootId})`);
+      logger.info(`${gatewayName} gateway listening on ${host}:${port} (boot ${bootId})`);
+      if (isWildcardBindHost(host)) {
+        // Wildcard/network binds are the case people get wrong: they copy the
+        // bind address into a client URL and get 421'd by the guard above.
+        logger.info(`Local clients must connect to ${localGatewayUrl(host, port)} — not http://${host}:${port}`);
+      }
       resolve();
     });
   });

@@ -2,18 +2,12 @@ import fs from "node:fs";
 import { JINN_HOME } from "../shared/paths.js";
 import { loadConfig } from "../shared/config.js";
 import { readGatewayAuthToken } from "../gateway/auth.js";
+import { localGatewayUrl } from "../shared/gateway-url.js";
 
 export interface PairingCodeResponse {
   code: string;
   expiresAt: string;
   ttlSeconds: number;
-}
-
-function localGatewayUrl(host: string, port: number): string {
-  if (host === "0.0.0.0") return `http://127.0.0.1:${port}`;
-  if (host === "::" || host === "[::]") return `http://[::1]:${port}`;
-  const formatted = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
-  return `http://${formatted}:${port}`;
 }
 
 export async function requestPairingCode(options?: { fetchImpl?: typeof fetch }): Promise<PairingCodeResponse> {

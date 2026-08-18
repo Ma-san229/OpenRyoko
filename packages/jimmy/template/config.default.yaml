@@ -4,7 +4,10 @@ jinn:
 gateway:
   port: 7777
   host: "127.0.0.1"
-  # 0.0.0.0 / :: で公開する場合、実NICのIP以外のHost名は明示許可する
+  # host は「どこで待ち受けるか」であって「どこへ接続するか」ではない。
+  # 0.0.0.0 / :: で公開しても、ローカルからの接続先は http://127.0.0.1:7777 を使う
+  # （接続可能なURLは $RYOKO_GATEWAY_URL として全プロセスに渡される）。
+  # リバースプロキシ等で実NICのIP以外のHost名を使う場合は明示許可する
   # allowedHosts: ["ryoko.example.com"]
   # 信頼できるHTTPSリバースプロキシの直後でのみ有効化する
   # trustProxyHeaders: false

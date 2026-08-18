@@ -2,6 +2,40 @@
 
 > **バージョン体系について**: 2026.4.26 から日付ベース (`YYYY.M.D`) のCalVerに移行しました。npm semver の制約上、月・日の leading zero は付けません (例: 4月26日 → `2026.4.26`)。
 
+## [2026.8.20] - 2026-08-18
+
+> `gateway.host: 0.0.0.0` / `::` の環境で、AIやCLIへ渡されたURLがGateway自身に
+> `421 host_not_allowed` で拒否され、CronやSlack投稿が無言で止まる問題を恒久修正。
+
+### このリリースでできるようになったこと
+
+- **ネットワーク待受でも内部処理が止まらない**: 待受アドレス（bind）と接続先URL（connect）を明確に分離。`0.0.0.0` / `::` で待ち受けても、システムプロンプト、`ryoko status`、`ryoko pair`、AIの子プロセスには接続可能なloopback URLを渡す。
+- **認証情報やURLを手書きせずGateway APIを呼べる**: `ryoko api GET /api/status`、`ryoko api POST /api/sessions --data '{...}'` を追加。正しい接続先とBearer tokenを自動選択し、外部URLへのtoken送信を拒否。401 / 421を含むHTTPエラーも終了コードと本文で確認できる。
+- **既存のスキルやCronをアップデート時に修復できる**: `ryoko update` が `~/.ryoko` 内の `http://0.0.0.0:<port>` / `http://[::]:<port>` を検出し、バックアップ後にloopbackへ自動置換。`ryoko migrate --check` で確認、`ryoko migrate --fix` で手動修復もできる。
+- **Bearer付け忘れ候補に気づける**: マイグレーション監査が、保護APIを直接curlしているのに認証処理が見当たらないファイルを警告し、`ryoko api`への移行を案内する。
+
+### 安全性と信頼性
+
+- Hostガードは緩和しない。`Host: 0.0.0.0` / `Host: [::]` は、ブラウザらしいヘッダーの有無に関係なく拒否する。
+- `gateway.allowedHosts` にワイルドカードbindを追加しても安全なHost名として扱わず、警告して無視する。DNS rebinding / “0.0.0.0 day” への防御を維持。
+- 421レスポンスとwarnログに、拒否理由と使うべきloopback URLを表示。ログはHostごとに一度、最大50種類までに制限してログ洪水を防ぐ。
+- 自動置換はテキストファイルだけを対象にし、symlink、ログ、DB、モデル、ソースcheckout、巨大ファイルを除外。変更前ファイルをユーザー専用backup directoryへ保存し、元のpermissionを維持してatomic置換する。
+- AIへ渡す標準の委任・コネクタ・同期例を、認証なしcurlから`ryoko api`へ変更。
+
+### 互換性に関する注意
+
+- `http://0.0.0.0:<port>` は待受指定であり、クライアントの接続先としては使えない。`~/.ryoko` 外にある独自スクリプトは `ryoko api` または `$RYOKO_GATEWAY_URL` + Bearer認証へ変更する。
+- 応急処置で `gateway.allowedHosts: [0.0.0.0]` を追加していた場合、この値は本リリースから無視されるため削除できる。
+
+### Verification
+
+- Backend: **97 test files / 780 tests pass**
+- Web: **12 test files / 85 tests pass**
+- backend / WebのTypeScript typecheck、production build、`git diff --check`
+- strict Hostガード、URL変換、token付与、外部URL拒否、バックアップ付き移行監査を回帰テスト化
+- ワイルドカードbindの実Gatewayでloopback成功、wildcard Host拒否、401 / 421診断、`ryoko api`を実測
+- production依存監査とnpm公開物のsecret・秘密鍵・個人絶対パス走査
+
 ## [2026.8.19] - 2026-08-18
 
 > 2026.8.18 と同日の追加リリース。OpenRyoko自身の更新をダッシュボードとチャットで見逃さないための通知機能を追加。

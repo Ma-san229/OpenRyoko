@@ -66,6 +66,15 @@ program
   });
 
 program
+  .command("api <method> <path>")
+  .description("認証付きでこのインスタンスのGateway APIを呼び出す")
+  .option("-d, --data <json>", "JSONリクエスト本文（POST/PUT/PATCH/DELETE用）")
+  .action(async (method: string, apiPath: string, opts: { data?: string }) => {
+    const { runApi } = await import("../src/cli/api.js");
+    await runApi({ method, path: apiPath, data: opts.data });
+  });
+
+program
   .command("create <name>")
   .description("新しいOpenRyokoインスタンスを作成する")
   .option("-p, --port <port>", "ゲートウェイのポート（省略時は自動割当）")
@@ -115,6 +124,7 @@ program
   .description("未適用のテンプレート・マイグレーションを適用する")
   .option("--check", "未適用のマイグレーションをチェックのみ（適用はしない）")
   .option("--auto", "安全な変更のみをAI起動なしで自動適用")
+  .option("--fix", "旧gateway URLをバックアップ後に安全なloopback URLへ置換")
   .action(async (opts) => {
     const { runMigrate } = await import("../src/cli/migrate.js");
     await runMigrate(opts);
