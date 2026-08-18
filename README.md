@@ -387,6 +387,10 @@ OpenRyoko は **個人マシン or 信頼境界内の VPS で 1 人 / 1 チー�
   OpenRyokoの端末認証が自動的に有効になるが、通信を暗号化する機能は内蔵しない。
   **Tailscale/VPN内で利用するか、HTTPSリバースプロキシ**（Cloudflare Access、Caddy、
   nginx等）を前段に置くこと。平文HTTPのままインターネットへ公開しない。
+- `gateway.host` は待受アドレスであり接続先URLではない。`0.0.0.0` / `::` で待ち受ける
+  場合もローカルAPIは `ryoko api GET /api/status` のように呼ぶ。`ryoko api` は安全な
+  loopback URLを選び、Bearer認証を自動付与する。直接HTTPを使う必要がある子プロセスには
+  接続可能なURLが `$RYOKO_GATEWAY_URL` で渡される。
 - リバースプロキシの公開名は `gateway.allowedHosts` に列挙する。プロキシが設定する
   `X-Forwarded-Proto`をCookieの`Secure`判定に使う場合だけ
   `gateway.trustProxyHeaders: true`を設定し、プロキシの接続元IPを

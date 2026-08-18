@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Employee, JinnConfig } from "../shared/types.js";
+import { gatewayUrlFromConfig } from "../shared/gateway-url.js";
 import { JINN_HOME, ORG_DIR, CRON_JOBS, DOCS_DIR } from "../shared/paths.js";
 import { isOperatorSpeaker } from "../shared/operator-match.js";
 import { scanOrg } from "../gateway/org.js";
@@ -84,10 +85,11 @@ export function buildContext(opts: {
   const maxChars = opts.config?.context?.maxChars ?? DEFAULT_MAX_CONTEXT_CHARS;
   const sections: Section[] = [];
 
-  // Compute gateway URL once — used by multiple sections
-  const gatewayUrl = opts.config
-    ? `http://${opts.config.gateway.host || "127.0.0.1"}:${opts.config.gateway.port || 7777}`
-    : "http://127.0.0.1:7777";
+  // Compute gateway URL once — used by multiple sections.
+  // MUST go through gatewayUrlFromConfig: `gateway.host` is a *bind* address, and
+  // a wildcard bind (0.0.0.0) is not a connectable target — the host guard would
+  // 421 every curl example we bake into this prompt.
+  const gatewayUrl = gatewayUrlFromConfig(opts.config);
 
   // Resolve personalized names from config
   const portalName = opts.portalName || opts.config?.portal?.portalName || "Ryoko";
@@ -193,7 +195,7 @@ export function buildContext(opts: {
         tier: Tier.STANDARD,
         marker: "## Available services",
         content: svcCtx,
-        summary: `## Available services\nUse \`POST ${gatewayUrl}/api/org/cross-request\` to request services from other employees.`,
+        summary: "## Available services\nUse `ryoko api POST /api/org/cross-request --data '{...}'` to request services from other employees.",
       });
     }
   }
@@ -257,7 +259,7 @@ export function buildContext(opts: {
       tier: Tier.OPTIONAL,
       marker: "## Employee Delegation",
       content: buildDelegationProtocol(gatewayUrl, portalName, opts.config),
-      summary: `## Employee Delegation Protocol\nDelegate via \`POST ${gatewayUrl}/api/sessions\` with \`{prompt, employee, parentSessionId}\`. Check children via \`GET /api/sessions/:id/children\`.`,
+      summary: "## Employee Delegation Protocol\nDelegate via `ryoko api POST /api/sessions --data '{...}'`. Check children via `ryoko api GET /api/sessions/:id/children`.",
     });
   }
 
@@ -368,7 +370,7 @@ function buildChainOfCommand(
   return "\n" + lines.join("\n") + "\n";
 }
 
-function buildServicesContext(employee: Employee, gatewayUrl: string): string | null {
+function buildServicesContext(employee: Employee, _gatewayUrl: string): string | null {
   try {
     const registry = scanOrg();
     const services = buildServiceRegistry(registry);
@@ -376,7 +378,7 @@ function buildServicesContext(employee: Employee, gatewayUrl: string): string | 
 
     const lines: string[] = ["## Available services"];
     lines.push("Other employees provide the following services. To request one, use the cross-request API:");
-    lines.push(`\`POST ${gatewayUrl}/api/org/cross-request\` with \`{"fromEmployee": "${employee.name}", "service": "<name>", "prompt": "<what you need>"}\``);
+    lines.push(`\`ryoko api POST /api/org/cross-request --data '{"fromEmployee": "${employee.name}", "service": "<name>", "prompt": "<what you need>"}'\``);
     lines.push("");
 
     for (const [svcName, entry] of services) {
@@ -740,7 +742,7 @@ export function buildDetachedJobsContext(sessionId?: string, jobsDir?: string): 
   return lines.join("\n");
 }
 
-function buildConnectorContext(connectors: string[], gatewayUrl: string, portalName: string): string {
+function buildConnectorContext(connectors: string[], _gatewayUrl: string, portalName: string): string {
   const lines: string[] = [`## Available connectors: ${connectors.join(", ")}`];
   lines.push(`You can send messages and interact with external services via the ${portalName} gateway API.`);
   lines.push("Use connector messaging only for proactive messages to a different channel or conversation.\n");
@@ -763,7 +765,7 @@ function buildConnectorContext(connectors: string[], gatewayUrl: string, portalN
   lines.push("  The `internal` field is never posted publicly (saved for the operator). `react` makes the public reply a single emoji reaction; `suppressPublic` omits the public body.");
   lines.push("- When you are directly addressed (mentioned / asked), ALWAYS give a non-empty public reply. Use react-only for pure acknowledgments or social confirmations — never as the answer to a substantive question.");
 
-  lines.push(`\n- **List all connectors**: \`curl ${gatewayUrl}/api/connectors\``);
+  lines.push("\n- **List all connectors**: `ryoko api GET /api/connectors`");
   lines.push(`- Channel IDs and connector config can be found in \`~/.jinn/config.yaml\``);
   return lines.join("\n");
 }
@@ -873,7 +875,7 @@ function buildEvolutionContext(portalName: string, config?: JinnConfig): string 
         `- OR the user just successfully connected Slack and is exploring what to do next.`,
       );
       lines.push(
-        `When you do bring it up, keep it to one sentence and point them to **Settings → Slack → Agents View Canvas** in the Web UI. The user can also delegate the toggling to you (Bash tool: \`curl -X PUT http://...:7777/api/config\`) if they ask.`,
+        `When you do bring it up, keep it to one sentence and point them to **Settings → Slack → Agents View Canvas** in the Web UI. The user can also delegate the toggling to you (Bash tool: \`ryoko api PUT /api/config --data '{...}'\`) if they ask.`,
       );
     }
   }
@@ -885,7 +887,7 @@ function buildEvolutionContext(portalName: string, config?: JinnConfig): string 
  * Delegation protocol: condensed version focusing on the essential API patterns.
  * Verbose examples and multi-paragraph explanations have been trimmed.
  */
-function buildDelegationProtocol(gatewayUrl: string, _portalName: string, config?: JinnConfig): string {
+function buildDelegationProtocol(_gatewayUrl: string, _portalName: string, config?: JinnConfig): string {
   const defaultEngine = config?.engines.default || "claude";
   const engineConfig = defaultEngine === "codex"
     ? config?.engines.codex
@@ -908,7 +910,7 @@ You are the COO. You orchestrate employees by creating **linked child sessions**
 
 2. **Check for existing children first**:
 \`\`\`bash
-curl -s ${gatewayUrl}/api/sessions/<your-session-id>/children
+ryoko api GET /api/sessions/<your-session-id>/children
 \`\`\`
 If a child exists for this employee, reuse it (skip to step 5).
 
@@ -916,16 +918,14 @@ If a child exists for this employee, reuse it (skip to step 5).
 
 4. **Spawn**:
 \`\`\`bash
-curl -s -X POST ${gatewayUrl}/api/sessions \\
-  -H 'Content-Type: application/json' \\
-  -d '{"prompt": "<brief>", "employee": "<name>", "parentSessionId": "<your-session-id>"}'
+ryoko api POST /api/sessions \\
+  --data '{"prompt": "<brief>", "employee": "<name>", "parentSessionId": "<your-session-id>"}'
 \`\`\`
 
 5. **Follow up** (existing child):
 \`\`\`bash
-curl -s -X POST ${gatewayUrl}/api/sessions/<child-id>/message \\
-  -H 'Content-Type: application/json' \\
-  -d '{"message": "<follow-up>"}'
+ryoko api POST /api/sessions/<child-id>/message \\
+  --data '{"message": "<follow-up>"}'
 \`\`\`
 
 6. **Respond immediately**: Tell the user you've delegated and will follow up when it's done. **Do NOT poll or wait** — end your turn now.
@@ -961,7 +961,14 @@ Your current session ID is in the "Current session" section above. Use it as \`p
 function buildApiReference(gatewayUrl: string, portalName: string): string {
   return `## ${portalName} Gateway API (${gatewayUrl})
 
-You can call these endpoints with curl to inspect and manage the gateway:
+Use \`ryoko api GET /api/status\` (or \`POST ... --data '{...}'\`) for local API calls.
+It chooses a connectable loopback URL, adds the instance's bearer token, refuses external URLs,
+and reports non-2xx responses instead of failing silently. For tools that cannot invoke the CLI,
+the connectable URL is exported as \`$RYOKO_GATEWAY_URL\`; those callers must still add the bearer
+token. Never turn the bind address from config (\`gateway.host\`) into a URL: a wildcard bind like
+\`0.0.0.0\` is not a client destination and the gateway answers \`421 host_not_allowed\`.
+
+You can call these endpoints with \`ryoko api\` to inspect and manage the gateway:
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|

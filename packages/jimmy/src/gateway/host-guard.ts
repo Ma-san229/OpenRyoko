@@ -40,11 +40,12 @@ export function hostHeaderAllowed(
   if (LOOPBACK_HOSTS.has(requested)) return true;
 
   const configured = normalizeHost(configuredHost);
+
   const explicitHosts = Array.isArray(allowedHosts) ? allowedHosts.filter((host) => typeof host === "string") : [];
   const allowed = new Set(
     [...explicitHosts, ...(configured && WILDCARD_HOSTS.has(configured) ? interfaceHosts : [])]
       .map((host) => normalizeHost(host))
-      .filter((host): host is string => Boolean(host)),
+      .filter((host): host is string => host !== null && !WILDCARD_HOSTS.has(host)),
   );
   if (configured && !WILDCARD_HOSTS.has(configured)) allowed.add(configured);
   return allowed.has(requested);

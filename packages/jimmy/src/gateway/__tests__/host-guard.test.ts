@@ -17,4 +17,13 @@ describe("gateway Host guard", () => {
     expect(hostHeaderAllowed("ryoko.example.com:443", "0.0.0.0", ["ryoko.example.com"], [])).toBe(true);
     expect(hostHeaderAllowed("RYOKO.EXAMPLE.COM.:443", "::", ["ryoko.example.com"], [])).toBe(true);
   });
+
+  it("always rejects wildcard Host values, even on a wildcard bind", () => {
+    expect(hostHeaderAllowed("0.0.0.0:7777", "0.0.0.0", [], [])).toBe(false);
+    expect(hostHeaderAllowed("[::]:7777", "::", [], [])).toBe(false);
+    expect(hostHeaderAllowed("0.0.0.0:7777", "0.0.0.0", ["0.0.0.0"], [])).toBe(false);
+    expect(hostHeaderAllowed("[::]:7777", "::", ["::"], [])).toBe(false);
+    expect(hostHeaderAllowed("attacker.example:7777", "0.0.0.0", [], [])).toBe(false);
+    expect(hostHeaderAllowed(undefined, "0.0.0.0", [], [])).toBe(false);
+  });
 });
